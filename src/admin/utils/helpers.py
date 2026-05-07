@@ -97,11 +97,12 @@ def get_tenant_config_from_db(tenant_id):
                     )
                 elif adapter_type == "mock":
                     adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
-                elif adapter_type == "triton":
-                    if adapter_obj.triton_station_id:
-                        adapter_config[adapter_type]["station_id"] = adapter_obj.triton_station_id
-                    if adapter_obj.triton_api_key:
-                        adapter_config[adapter_type]["api_key"] = adapter_obj.triton_api_key
+                elif adapter_type in {"triton", "triton_digital"}:
+                    if adapter_obj.config_json:
+                        adapter_config[adapter_type].update(adapter_obj.config_json)
+                elif adapter_type == "freewheel":
+                    if adapter_obj.config_json:
+                        adapter_config[adapter_type].update(adapter_obj.config_json)
 
                 config["adapters"] = adapter_config
 
