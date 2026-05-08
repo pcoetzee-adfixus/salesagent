@@ -31,6 +31,21 @@ must pass the guard. The flag is distinct from ``management_api_caller``
 so audit logs can still tell synchronous-API and async-worker mutations
 apart.
 
+The closed set of authorized ``platform_background_worker`` call sites
+(everything else is either publisher UI — blocked by the embedded-mode
+middleware — or open-instance code that the guard short-circuits):
+
+- :func:`src.services.background_sync_service._sync_session` —
+  inventory + targeting-key + advertisers sync workers, kicked off by
+  ``/provision``, ``/refresh``, and the admin-button path.
+- :meth:`src.adapters.gam.managers.targeting.GAMTargetingManager.sync_custom_targeting_keys`
+  — adapter-layer cache rebuild for the same ``custom_targeting_keys``
+  field. Currently dormant (no in-code callers) but flagged for parity.
+
+Adding a new call site is a trust expansion — it should write a
+genuinely platform-managed surface, not paper over a publisher-UI write
+that would more correctly be routed through the management API.
+
 Importing this module attaches the listeners as a side effect; no further
 wiring is required.
 """

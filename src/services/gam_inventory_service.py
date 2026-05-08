@@ -623,10 +623,14 @@ class GAMInventoryService:
             else:
                 logger.info(f"No custom targeting keys found in gam_inventory for tenant {tenant_id}")
         except Exception as e:
-            # Roll the session back so the outer sync loop can keep using it
-            # for subsequent phases (audience segments, mark-stale, etc.).
-            # Without this, every later statement on this session raises
-            # PendingRollbackError that buries the original cause in logs.
+            # Prior sync phases (ad units, placements, labels, targeting
+            # keys) have each called _flush_batch+commit before reaching
+            # this method, so a full-session rollback here drops only the
+            # uncommitted adapter_config update — there's nothing else to
+            # lose. Required so subsequent phases (audience segments,
+            # mark-stale) can keep using the session; otherwise every later
+            # statement raises PendingRollbackError that buries the
+            # original cause in logs.
             self.db.rollback()
             logger.error(f"Failed to update adapter_config.custom_targeting_keys: {e}", exc_info=True)
 
