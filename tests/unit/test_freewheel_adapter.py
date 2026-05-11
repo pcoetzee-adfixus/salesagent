@@ -12,6 +12,7 @@ from src.adapters import get_adapter_default_channels, get_adapter_schemas
 from src.adapters.freewheel import FreeWheelAdapter, FreeWheelAPIError, FreeWheelClient
 from src.adapters.freewheel.schemas import FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adapter_test_helpers import invoke_create_media_buy
 
 
@@ -31,6 +32,7 @@ def sample_request():
 
     start = datetime.now(UTC)
     return CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "brand.example.com"},
         packages=[create_test_package_request(product_id="prod_video_1")],
         start_time=start,

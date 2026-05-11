@@ -17,6 +17,7 @@ from adcp.types import (
     McpWebhookPayload,
     SyncCreativeResult,
     SyncCreativesSuccessResponse,
+    TaskType,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -245,10 +246,20 @@ async def _call_webhook_for_creative_status(
                     context_id=step_context_id,
                 )
             else:
-                # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-                # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                mcp_payload_dict = create_mcp_webhook_payload(step_step_id, GeneratedTaskStatus.completed, result_dict)
-                payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
+                # adcp 5.0+: returns McpWebhookPayload directly; task_type must be a
+                # TaskType enum member. step_tool_name is free-form (may include
+                # internal review actions outside the enum); coerce or fall back to
+                # the canonical creative-sync action for this webhook surface.
+                try:
+                    task_type_arg: Any = TaskType(step_tool_name) if step_tool_name else TaskType.sync_creatives
+                except ValueError:
+                    task_type_arg = TaskType.sync_creatives
+                payload = create_mcp_webhook_payload(
+                    step_step_id,
+                    GeneratedTaskStatus.completed,
+                    task_type_arg,
+                    result=result_dict,
+                )
 
             metadata = {
                 "task_type": step_tool_name

@@ -61,6 +61,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration.conftest import create_test_product_with_pricing, get_pricing_option_id
 
@@ -333,6 +334,7 @@ class TestMinimumSpendValidation:
 
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -369,6 +371,7 @@ class TestMinimumSpendValidation:
         # Try to create media buy below product override ($5000)
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -405,6 +408,7 @@ class TestMinimumSpendValidation:
         # Create media buy above product minimum ($500) but below currency limit ($1000)
         # Should succeed because product override is lower
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -436,6 +440,7 @@ class TestMinimumSpendValidation:
 
         # Create media buy above minimum - should succeed
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -469,6 +474,7 @@ class TestMinimumSpendValidation:
         # Try to create media buy with excessive budget
         # $100,000 USD produces 10M impressions which exceeds the adapter limit
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -502,6 +508,7 @@ class TestMinimumSpendValidation:
         # $800 should fail (below $1000 USD minimum)
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -548,6 +555,7 @@ class TestMinimumSpendValidation:
 
         # Create media buy with low budget in GBP (should succeed - no minimum)
         req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

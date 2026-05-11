@@ -31,6 +31,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_format
 from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
 
@@ -365,6 +366,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
         # Step 2: Update the media buy to add creative_ids
         # Note: AdCP oneOf constraint — provide media_buy_id OR buyer_ref, not both
         update_req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id=media_buy_id,
             packages=[
                 {

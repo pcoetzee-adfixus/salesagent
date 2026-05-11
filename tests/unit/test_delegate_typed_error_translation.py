@@ -90,9 +90,13 @@ def _invoke_delegate(delegate_name: str, side_effect: Exception) -> Any:
     fake_ctx = object()
 
     if delegate_name == "_delegate_update_media_buy":
+        # Translation runs after request coercion; supply the spec-required
+        # ``account`` + ``idempotency_key`` so the body validates.
+        from tests.factories.spec_required_kwargs import required_request_kwargs
+
         with patch.object(_delegate, "_update_media_buy_impl", side_effect=side_effect):
             with patch.object(_delegate, "_build_identity", return_value=_identity_stub()):
-                return asyncio.run(_delegate._delegate_update_media_buy("mb_x", {}, fake_ctx))
+                return asyncio.run(_delegate._delegate_update_media_buy("mb_x", required_request_kwargs(), fake_ctx))
 
     if delegate_name == "_delegate_create_media_buy":
         # ``_create_media_buy_impl`` is async; raise via a coroutine factory
@@ -157,9 +161,9 @@ def test_typed_error_translates_to_wire_envelope_on_both_transports(
     )
     # Message must be preserved verbatim — buyer agents key retry decisions
     # off the human-readable message in addition to the code.
-    assert error_message in (
-        exc_info.value.args[0] if exc_info.value.args else ""
-    ), f"transport={transport} delegate={delegate_name}: message {error_message!r} did not survive translation"
+    assert error_message in (exc_info.value.args[0] if exc_info.value.args else ""), (
+        f"transport={transport} delegate={delegate_name}: message {error_message!r} did not survive translation"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +202,13 @@ def test_pydantic_validation_error_translates_to_invalid_request(transport: str)
     # send a string. Pydantic raises ValidationError during coercion inside
     # ``_coerce_to_request_model`` — that's the exception the decorator
     # must catch and translate.
-    bad_patch = {"packages": "not_a_list"}
+    # Supply spec-required ``account`` + ``idempotency_key`` so the *only*
+    # validation failure is the deliberately-bad ``packages`` field — without
+    # this the validator stops on missing required fields and the test
+    # asserts on the wrong error.
+    from tests.factories.spec_required_kwargs import required_request_kwargs
+
+    bad_patch = {**required_request_kwargs(), "packages": "not_a_list"}
 
     with patch("core.platforms._delegate.current_transport", MagicMock(get=MagicMock(return_value=transport))):
         with patch.object(_delegate, "_build_identity", return_value=_identity_stub()):
@@ -218,9 +228,9 @@ def test_pydantic_validation_error_translates_to_invalid_request(transport: str)
     # agent can repair the offending field. ``packages`` is a list of
     # AdCPPackageUpdate; pydantic reports ``loc=('packages', 0)`` when the
     # input string is iterated into characters.
-    assert exc_info.value.field is not None and exc_info.value.field.startswith(
-        "packages"
-    ), f"transport={transport}: expected field path under 'packages', got {exc_info.value.field!r}"
+    assert exc_info.value.field is not None and exc_info.value.field.startswith("packages"), (
+        f"transport={transport}: expected field path under 'packages', got {exc_info.value.field!r}"
+    )
 
 
 def test_every_delegate_is_decorated_with_translate_adcp_errors() -> None:

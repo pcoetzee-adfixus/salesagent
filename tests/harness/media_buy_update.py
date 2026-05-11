@@ -37,6 +37,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.harness._base import BaseTestEnv
 
 _MODULE = "src.core.tools.media_buy_update"
@@ -184,5 +185,5 @@ class MediaBuyUpdateEnv(BaseTestEnv):
             ext = kwargs.setdefault("ext", {}) or {}
             ext.setdefault("salesagent", {})["budget"] = budget_val
             kwargs["ext"] = ext
-        req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=media_buy_id, **kwargs)
         return _update_media_buy_impl(req=req, identity=self.identity)

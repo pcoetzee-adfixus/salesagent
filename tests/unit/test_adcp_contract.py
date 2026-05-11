@@ -55,6 +55,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     Product as ProductSchema,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestSchemaMatchesLibrary:
@@ -643,6 +644,7 @@ class TestAdCPContract:
         # Per AdCP spec, packages is required and budget is at package level
         # In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain field)
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "nike.com"},  # Required in adcp 3.6.0 (was brand_manifest)
             # Required per AdCP spec
             packages=[
@@ -1037,7 +1039,9 @@ class TestAdCPContract:
             assert field not in adcp_response, f"Internal field '{field}' exposed in AdCP response"
 
         # Verify AdCP-specific requirements
-        assert adcp_response["signal_type"] in ["marketplace", "custom", "owned"], "signal_type must be valid enum"
+        assert adcp_response["signal_type"].value in ["marketplace", "custom", "owned"], (
+            "signal_type must be valid enum"
+        )
         assert 0 <= adcp_response["coverage_percentage"] <= 100, "coverage_percentage must be 0-100"
 
         # Verify deployments array structure
@@ -1059,7 +1063,7 @@ class TestAdCPContract:
         # adcp 3.6.0: signal_id is now a separate field in the library (optional, distinct from signal_agent_segment_id)
         # The backward compat @property is superseded by the library field
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
-        assert signal.signal_type == "marketplace", "signal_type field should work"
+        assert signal.signal_type.value == "marketplace", "signal_type field should work"
 
         # Test internal model_dump includes all fields
         internal_response = signal.model_dump_internal()
@@ -1479,6 +1483,7 @@ class TestAdCPContract:
         from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],
             assignments=[
                 Assignment(creative_id="creative_123", package_id="pkg_1"),
@@ -1558,7 +1563,7 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_456",
                     action="updated",
-                    status="pending",
+                    status="pending_review",
                     changes=["url", "name"],
                 ),
                 SyncCreativeResult(
@@ -2486,6 +2491,7 @@ class TestAdCPContract:
 
         # Test AdCP-compliant request with media_buy_id (oneOf option 1)
         adcp_request_id = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_12345",
             paused=False,  # adcp 2.12.0+: replaced 'active' with 'paused'
             start_time=datetime(2025, 2, 1, 9, 0, 0, tzinfo=UTC),
@@ -2540,7 +2546,7 @@ class TestAdCPContract:
         from pydantic import ValidationError as PydanticValidationError
 
         with pytest.raises((PydanticValidationError, ValueError)):
-            UpdateMediaBuyRequest(paused=False)  # missing required media_buy_id
+            UpdateMediaBuyRequest(**required_request_kwargs(), paused=False)  # missing required media_buy_id
 
     def test_task_status_mcp_integration(self):
         """Test TaskStatus integration with MCP response schemas (AdCP PR #77)."""
@@ -2627,6 +2633,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "flashsale.com"},
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
             end_time=end_date,
@@ -2637,7 +2644,7 @@ class TestAdCPContract:
         if hasattr(request.start_time, "root"):  # noqa: rootmodel
             assert request.start_time.root == "asap"
         else:
-            assert request.start_time == "asap"
+            assert request.start_time.root == "asap"
 
         # Verify it serializes correctly
         data = request.model_dump()
@@ -2649,12 +2656,13 @@ class TestAdCPContract:
 
         # Test with 'asap' start_time
         request = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_test_123",
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
         )
 
         # Verify asap is accepted
-        assert request.start_time == "asap"
+        assert request.start_time.root == "asap"
 
         # Verify it serializes correctly
         data = request.model_dump()
@@ -2669,6 +2677,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "scheduled.com"},
             start_time=start_date,
             end_time=end_date,
@@ -2680,7 +2689,7 @@ class TestAdCPContract:
             assert isinstance(request.start_time.root, datetime)
             assert request.start_time.root == start_date
         else:
-            assert isinstance(request.start_time, datetime)
+            assert isinstance(request.start_time.root, datetime)
             assert request.start_time == start_date
 
     def test_product_publisher_properties_constraint(self):
@@ -2752,6 +2761,7 @@ class TestAdCPContract:
         # Test with inline brand reference
         # Per AdCP spec, budget is at package level, not request level
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "nike.com"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
@@ -2772,6 +2782,7 @@ class TestAdCPContract:
 
         # Test with brand reference + optional brand_id
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "nike.com", "brand_id": "brand_nike_001"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,

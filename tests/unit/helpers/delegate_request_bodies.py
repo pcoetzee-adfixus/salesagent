@@ -24,8 +24,13 @@ def minimal_create_media_buy_body() -> dict[str, Any]:
     Used by tests that exercise the create_media_buy delegate path without
     caring about the impl's actual semantics (e.g. translation tests,
     forwarding tests). Mutate the returned dict freely.
+
+    ``account`` and ``idempotency_key`` are spec-required on adcp 5.0+; the
+    spec-correct shape includes them.
     """
     return {
+        "account": {"account_id": "test-acct"},
+        "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
         "brand": {"domain": "testbrand.com"},
         "packages": [
             {

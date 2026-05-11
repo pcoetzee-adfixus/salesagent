@@ -30,6 +30,7 @@ from tests.e2e.conftest import (
     GAM_TEST_ADVERTISER_ID,
     GAM_TEST_NETWORK_CODE,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 GAM_LIFECYCLE_TENANT_ID = "gam_lifecycle_test"
 
@@ -426,6 +427,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
     )
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         po_number=po_number,
         start_time=start_time,
@@ -469,7 +471,11 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
             start_time=start_time,
             end_time=end_time,
             status="approved",
-            raw_request={"brand": {"domain": "testbrand.com"}},
+            raw_request={
+                "account": {"account_id": "test-acct"},
+                "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
+                "brand": {"domain": "testbrand.com"},
+            },
         )
         session.add(media_buy)
         session.flush()

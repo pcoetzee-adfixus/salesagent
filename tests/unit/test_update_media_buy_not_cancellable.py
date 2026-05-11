@@ -22,6 +22,7 @@ import pytest
 from src.core.exceptions import AdCPNotCancellableError
 from src.core.schemas import UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.unit._update_media_buy_helpers import (
     UpdateMediaBuyImplFixture,
     make_delegate_ctx,
@@ -46,6 +47,7 @@ class TestImplRaisesNotCancellableOnReCancel:
 
         with UpdateMediaBuyImplFixture(existing_media_buy=existing_mb):
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_canceled",
                 canceled=True,
                 cancellation_reason="Deliberate re-cancel to force NOT_CANCELLABLE",
@@ -90,7 +92,9 @@ class TestDelegateProjectsNotCancellableToWireEnvelope:
             ),
         ):
             with pytest.raises(AdcpError) as exc_info:
-                run_delegate_coro(_delegate_update_media_buy("mb_x", {"canceled": True}, ctx))
+                run_delegate_coro(
+                    _delegate_update_media_buy("mb_x", {**required_request_kwargs(), "canceled": True}, ctx)
+                )
 
         assert exc_info.value.code == "NOT_CANCELLABLE"
         assert exc_info.value.recovery == "correctable"

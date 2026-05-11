@@ -14,6 +14,8 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.factories.spec_required_kwargs import required_request_kwargs
+
 # adcp 4.4 wire-required envelope on mutation tools — buyers must supply
 # both. Match the pattern used by tests/e2e/adcp_request_builder.py so test
 # inputs reflect real-buyer wire shape rather than the schema we'd prefer.
@@ -82,6 +84,7 @@ class TestMCPToolRoundtripMinimal:
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
                     "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                    **_wire_envelope("roundtrip-create"),
                 },
             )
 
@@ -119,6 +122,7 @@ class TestMCPToolRoundtripMinimal:
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
                     "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                    **_wire_envelope("roundtrip-update-create"),
                 },
             )
 
@@ -205,7 +209,8 @@ class TestMCPToolRoundtripMinimal:
                             "click_url": {"url": "https://example.com"},
                         },
                     }
-                ]
+                ],
+                **_wire_envelope("roundtrip-sync"),
             },
         )
 
@@ -259,7 +264,7 @@ class TestSchemaConstructionValidation:
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Test with only media_buy_id (required via oneOf constraint)
-        req = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="test_buy_123")
 
         assert req.media_buy_id == "test_buy_123"
         assert req.paused is None  # adcp 2.12.0+: replaced 'active' with 'paused'
@@ -273,10 +278,12 @@ class TestSchemaConstructionValidation:
         """Verify that all request schemas can be constructed without all fields."""
         from src.core import schemas
 
-        # Test schemas that should work with minimal params
+        # Test schemas that should work with minimal params. ``account`` and
+        # ``idempotency_key`` are spec-required on UpdateMediaBuyRequest (no
+        # spec mode permits omission); supplied via required_request_kwargs().
         test_cases = [
             (schemas.GetProductsRequest, {"buying_mode": "wholesale", "brand": {"domain": "testbrand.com"}}),
-            (schemas.UpdateMediaBuyRequest, {"media_buy_id": "test"}),
+            (schemas.UpdateMediaBuyRequest, {**required_request_kwargs(), "media_buy_id": "test"}),
             (schemas.GetMediaBuyDeliveryRequest, {}),
             (schemas.ListCreativesRequest, {}),
             (schemas.ListAuthorizedPropertiesRequest, {}),
@@ -307,7 +314,7 @@ class TestParameterToSchemaMapping:
         }
 
         # Create request with valid fields only
-        req = UpdateMediaBuyRequest(**tool_params)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), **tool_params)
 
         # Valid fields should be set
         assert req.media_buy_id == "test_buy_123"

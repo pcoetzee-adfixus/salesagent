@@ -176,16 +176,16 @@ def test_validation_error_wire_envelope_mcp(authenticated_principal) -> None:
         f"Without the ValidationError translation, the framework wraps it as "
         f"INTERNAL_ERROR ('Platform method raised ValidationError')."
     )
-    assert (
-        adcp_error.get("code") != "INTERNAL_ERROR"
-    ), "ValidationError leaked through as INTERNAL_ERROR — translator regression"
-    assert (
-        adcp_error.get("recovery") == "correctable"
-    ), f"Expected recovery='correctable' (buyer-fixable), got {adcp_error.get('recovery')!r}"
+    assert adcp_error.get("code") != "INTERNAL_ERROR", (
+        "ValidationError leaked through as INTERNAL_ERROR — translator regression"
+    )
+    assert adcp_error.get("recovery") == "correctable", (
+        f"Expected recovery='correctable' (buyer-fixable), got {adcp_error.get('recovery')!r}"
+    )
     field = adcp_error.get("field") or ""
-    assert (
-        "packages" in field or "salesagent_unknown_field" in field
-    ), f"Expected adcp_error.field to surface the offending field path; got {field!r}"
+    assert "packages" in field or "salesagent_unknown_field" in field, (
+        f"Expected adcp_error.field to surface the offending field path; got {field!r}"
+    )
 
 
 @pytest.mark.requires_db
@@ -258,9 +258,9 @@ def test_validation_error_wire_envelope_a2a(authenticated_principal) -> None:
     assert artifacts, f"A2A failed task must publish an artifact carrying adcp_error; got: {json.dumps(result)[:500]}"
     parts = artifacts[0].get("parts") or []
     data_part = next((p for p in parts if p.get("kind") == "data"), None)
-    assert (
-        data_part is not None
-    ), f"A2A artifact must include a DataPart with adcp_error; got: {json.dumps(parts)[:500]}"
+    assert data_part is not None, (
+        f"A2A artifact must include a DataPart with adcp_error; got: {json.dumps(parts)[:500]}"
+    )
     adcp_error = data_part.get("data", {}).get("adcp_error")
     assert adcp_error is not None, f"DataPart.data.adcp_error missing; got: {json.dumps(data_part)[:500]}"
 
@@ -270,9 +270,9 @@ def test_validation_error_wire_envelope_a2a(authenticated_principal) -> None:
         f"on A2A wire path, got {adcp_error.get('code')!r}. Without the decorator's "
         f"ValidationError translation, this would be INTERNAL_ERROR ('Task failed')."
     )
-    assert (
-        adcp_error.get("recovery") == "correctable"
-    ), f"Expected adcp_error.recovery='correctable', got {adcp_error.get('recovery')!r}"
+    assert adcp_error.get("recovery") == "correctable", (
+        f"Expected adcp_error.recovery='correctable', got {adcp_error.get('recovery')!r}"
+    )
     field = adcp_error.get("field") or ""
     assert "packages" in field or "salesagent_unknown_field" in field, (
         f"Expected adcp_error.field to surface the offending field path so buyers "

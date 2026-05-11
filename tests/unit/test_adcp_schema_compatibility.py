@@ -79,7 +79,7 @@ class TestADCPSchemaCompatibility:
 
         assert signal.signal_agent_segment_id == "segment_123"
         assert signal.name == "Automotive Enthusiasts"
-        assert signal.signal_type == "marketplace"
+        assert signal.signal_type.value == "marketplace"
         assert signal.data_provider == "Optable"
         assert signal.coverage_percentage == 85.0
         assert len(signal.deployments) == 1
@@ -179,7 +179,7 @@ class TestADCPSchemaCompatibility:
         assert reconstructed.signal_agent_segment_id == original_data["signal_agent_segment_id"]
         assert reconstructed.name == original_data["name"]
         assert reconstructed.description == original_data["description"]
-        assert reconstructed.signal_type == original_data["signal_type"]
+        assert reconstructed.signal_type.value == original_data["signal_type"]
         assert reconstructed.data_provider == original_data["data_provider"]
         assert reconstructed.coverage_percentage == original_data["coverage_percentage"]
 

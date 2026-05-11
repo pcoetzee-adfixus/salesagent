@@ -30,6 +30,7 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -380,6 +381,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -408,9 +410,9 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
     # In dry-run mode, the response should succeed
@@ -427,6 +429,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -455,9 +458,9 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -475,6 +478,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -503,9 +507,9 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -524,6 +528,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
 
     # 10 day campaign: $5000 total = $500/day
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -552,9 +557,9 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -572,6 +577,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -610,9 +616,9 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
     # Each package should create a line item with correct pricing:
@@ -647,6 +653,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         session.commit()
 
     request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -673,9 +680,9 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+    )
     assert response.media_buy_id is not None
 
     # Cleanup auction pricing option

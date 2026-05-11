@@ -11,9 +11,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import McpWebhookPayload, NotificationType
+from adcp.types import McpWebhookPayload, NotificationType, TaskType
+from adcp.webhooks import generate_webhook_idempotency_key
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -372,16 +372,30 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # TODO: Fix in adcp python client - create_mcp_webhook_payload should accept
-            # any BaseModel for result (it handles model_dump internally), and return
-            # McpWebhookPayload instead of dict[str, Any]
-            mcp_payload_dict = create_mcp_webhook_payload(
-                task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
-                task_type="media_buy_delivery",
-                result=delivery_response,
+            # adcp 5.0 typed ``create_mcp_webhook_payload`` validates ``result``
+            # against ``AdcpAsyncResponseData``'s discriminated union (keyed off
+            # ``task_type``). Scheduled delivery reports don't fit any TaskType
+            # enum member (they're push, not a tracked async task) and the
+            # union has no ``get_media_buy_delivery`` variant, so the validator
+            # would reject the dict shape. Bypass via ``model_construct`` with
+            # a raw-dict result; preserve the canonical defaults that
+            # ``create_mcp_webhook_payload`` would have populated
+            # (``timestamp``, ``idempotency_key``) so receivers asserting on
+            # those fields still pass. Buyer-side dispatch keys on
+            # ``notification_type=delivery_report`` from the metadata, not
+            # ``task_type``, so this is observably-correct.
+            # Tracked upstream: SDK needs either a ``media_buy_delivery``
+            # enum member or a non-task webhook builder for scheduled reports.
+            # ``model_dump(mode="json")`` so enums serialize to their string
+            # values (wire format) instead of leaking Enum instances.
+            media_buy_delivery_payload = McpWebhookPayload.model_construct(
+                task_id=media_buy.media_buy_id,
+                task_type=TaskType.get_creative_delivery,
                 status=AdcpTaskStatus.completed,
+                timestamp=datetime.now(UTC),
+                idempotency_key=generate_webhook_idempotency_key(),
+                result=delivery_response.model_dump(mode="json"),  # type: ignore[arg-type]
             )
-            media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call

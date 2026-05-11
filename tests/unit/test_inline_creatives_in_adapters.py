@@ -21,6 +21,7 @@ from src.core.schemas import (
     MediaPackage,
     PackageRequest,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestInlineCreativesInAdapters:
@@ -45,6 +46,7 @@ class TestInlineCreativesInAdapters:
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "example.com"},
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),

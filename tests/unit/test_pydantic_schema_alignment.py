@@ -29,6 +29,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # Base URL for downloading AdCP schemas
 _ADCP_SCHEMA_BASE_URL = "https://adcontextprotocol.org"
@@ -574,6 +575,7 @@ class TestSpecificFieldValidation:
     def test_create_media_buy_accepts_brand_manifest(self):
         """REGRESSION TEST: brand must be accepted per AdCP v3.6.0 (replaced brand_manifest)."""
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "nike.com"},
             packages=[
                 {

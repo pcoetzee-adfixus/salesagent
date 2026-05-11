@@ -36,6 +36,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage, Principal, Targeting
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class GAMAutomationTester:
@@ -280,6 +281,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="AUTO001",
             total_budget=10.00,
@@ -338,6 +340,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="CONF001",
             total_budget=5.00,
@@ -397,6 +400,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="MAN001",
             total_budget=7.50,
@@ -458,6 +462,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="GUAR001",
             total_budget=500.00,
@@ -520,6 +525,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE001",
             total_budget=7.50,
@@ -588,6 +594,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE002",
             total_budget=20.00,
@@ -654,6 +661,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE003",
             total_budget=15.00,
@@ -724,6 +732,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE004",
             total_budget=1.00,

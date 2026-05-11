@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -31,6 +32,7 @@ class TestSyncCreativesCreativeIdsFilter:
 
         # Should accept creative_ids parameter
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],
             creative_ids=["creative_1"],  # Filter to only sync this creative
             dry_run=True,
@@ -53,6 +55,7 @@ class TestSyncCreativesCreativeIdsFilter:
         # Should reject patch parameter (removed in AdCP 2.5)
         with pytest.raises(ValidationError) as exc_info:
             SyncCreativesRequest(
+                **required_request_kwargs(),
                 creatives=[creative],
                 patch=True,  # Deprecated - should fail
             )
@@ -338,6 +341,7 @@ class TestSyncCreativesErrorCases:
 
         # Filter requests IDs that don't exist in payload
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],
             creative_ids=["nonexistent_1", "nonexistent_2"],  # None match
             dry_run=True,
@@ -376,6 +380,7 @@ class TestSyncCreativesErrorCases:
 
         # Filter includes one existing + one nonexistent
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=creatives,
             creative_ids=["creative_1", "nonexistent"],  # Only creative_1 matches
             dry_run=True,
@@ -406,12 +411,13 @@ class TestSyncCreativesErrorCases:
         )
 
         # None = no filter, process all
-        request_no_filter = SyncCreativesRequest(creatives=[creative], dry_run=True)
+        request_no_filter = SyncCreativesRequest(**required_request_kwargs(), creatives=[creative], dry_run=True)
         assert request_no_filter.creative_ids is None
 
         # adcp 3.6.0: empty list is rejected (MinLen(1) constraint)
         with pytest.raises(ValidationError, match="at least 1"):
             SyncCreativesRequest(
+                **required_request_kwargs(),
                 creatives=[creative],
                 creative_ids=[],
                 dry_run=True,
@@ -419,6 +425,7 @@ class TestSyncCreativesErrorCases:
 
         # List with IDs = filter to specific creatives
         request_with_filter = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],
             creative_ids=["creative_1"],
             dry_run=True,
@@ -657,6 +664,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
 
         # Both parameters together should be valid schema
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],
             creative_ids=["creative_1"],
             delete_missing=True,
@@ -691,6 +699,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
 
         # Scoped delete: creative_ids filter with delete_missing
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[creative],  # Only c1 in payload
             creative_ids=["c1", "c2"],  # Filter includes c2 not in payload
             delete_missing=True,
@@ -757,6 +766,7 @@ class TestUpsertSemantics:
 
         # Only c1 should be processed due to filter
         request = SyncCreativesRequest(
+            **required_request_kwargs(),
             creatives=[c1, c2],
             creative_ids=["c1"],  # Filter to only c1
             dry_run=True,

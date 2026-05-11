@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
 from adcp import Error
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     ContextObject,
     DeliveryStatus,  # noqa: F401 — used by Snapshot below
@@ -357,7 +356,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
-    affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
+    affected_packages: list[AffectedPackage] | None = None
 
     # workflow_step_id is surfaced on the wire so buyers can disambiguate
     # "deferred for approval" from "applied with no package effect" —
@@ -1430,21 +1429,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-
-    # Library v4.4.0 made idempotency_key required. Salesagent allows it
-    # optional — buyers that don't pass one fall through to the legacy
-    # MediaBuy.create_idempotency_key behavior. Override the field as
-    # optional with None default. Buyers who DO pass one still get
-    # PgBackend dedup via @IdempotencyStore.wrap on the platform method.
-    idempotency_key: str | None = None  # type: ignore[assignment]
-
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
-    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
+    packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -1454,8 +1442,9 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP spec.
         """
-        if self.start_time and self.start_time != "asap":
-            if isinstance(self.start_time, datetime) and self.start_time.tzinfo is None:
+        if self.start_time:
+            inner = self.start_time.root if hasattr(self.start_time, "root") else self.start_time
+            if isinstance(inner, datetime) and inner.tzinfo is None:
                 raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
@@ -1570,7 +1559,7 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # Same library default-injection bug as on the parent UpdateMediaBuyRequest
     # (Literal[True]=True). Force default to None so omitted fields don't
     # silently mark the package canceled. (#155)
-    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
+    canceled: Literal[True] | None = Field(default=None)
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
@@ -1592,23 +1581,14 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override datetime fields to accept raw strings (A2A path sends ISO strings)
-    start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
-    packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    packages: list[AdCPPackageUpdate] | None = None
     # Override library default of `canceled: Literal[True] = True`. Buyer
     # must explicitly send `canceled: true` to request cancellation;
     # omission must mean "not a cancellation request", not "default to
     # canceled". (#155)
-    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
-    # Library v4.4.0 made account + idempotency_key required. Salesagent
-    # resolves identity at the transport boundary (ResolvedIdentity), not from
-    # the request payload, so account stays optional. idempotency_key is
-    # optional for backward-compat with buyers that don't send one (the
-    # underlying impl is idempotent at the DB layer regardless).
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    canceled: Literal[True] | None = Field(default=None)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -1664,8 +1644,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
-            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
+        if self.start_time:
+            inner = self.start_time.root if hasattr(self.start_time, "root") else self.start_time
+            if isinstance(inner, datetime) and inner.tzinfo is None:
+                raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self
@@ -1952,8 +1934,8 @@ class Signal(LibrarySignal):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override types that differ from library
-    signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
+    # signal_type inherited from library as SignalCatalogType enum (members:
+    # marketplace, custom, owned). Use `.value` for string comparisons.
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
 
     # Internal fields — excluded from serialization.
@@ -1991,7 +1973,7 @@ class Signal(LibrarySignal):
             DeprecationWarning,
             stacklevel=2,
         )
-        return self.signal_type
+        return self.signal_type.value
 
     def model_dump_internal(self, **kwargs: Any) -> dict[str, Any]:
         """Dump including internal fields for database storage.
@@ -2032,7 +2014,7 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    signals: list[Signal] = Field(..., description="Array of available signals")  # type: ignore[assignment]
+    signals: list[Signal] = Field(..., description="Array of available signals")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

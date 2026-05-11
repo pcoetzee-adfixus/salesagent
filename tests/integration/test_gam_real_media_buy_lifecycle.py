@@ -39,6 +39,7 @@ from tests.factories import (
     TenantAuthConfigFactory,
     TenantFactory,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.harness._base import IntegrationEnv
 from tests.helpers.gam_test_config import non_guaranteed_cpm_impl_config
 from tests.integration.media_buy_helpers import make_lifecycle_identity
@@ -312,6 +313,7 @@ class TestGAMRealMediaBuyLifecycle:
 
             # ───── Phase 2: create_media_buy (real GAM order) ─────
             create_req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 start_time=_future(1),
                 end_time=_future(8),
@@ -446,6 +448,7 @@ class TestGAMOrderProgressesPastDraft:
 
             create_result = await _create_media_buy_impl(
                 req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     start_time=_future(1),
                     end_time=_future(8),
@@ -577,6 +580,7 @@ class TestGAMRealDeliveryWebhook:
 
                 create_result = await _create_media_buy_impl(
                     req=CreateMediaBuyRequest(
+                        **required_request_kwargs(),
                         brand={"domain": "testbrand.com"},
                         # Past-equivalent start so the scheduler's date-based
                         # status filter sees this buy as 'active' (the filter
@@ -721,6 +725,7 @@ class TestGAMRealCreativeApprovalAsync:
 
             create_result = await _create_media_buy_impl(
                 req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     start_time=_future(1),
                     end_time=_future(8),

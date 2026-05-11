@@ -30,6 +30,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _update_media_buy_impl, _verify_principal
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.unit._update_media_buy_helpers import (
     UpdateMediaBuyImplFixture,
     make_delegate_ctx,
@@ -81,6 +82,7 @@ class TestImplRaisesTypedNotFoundErrors:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[
                     {
@@ -109,6 +111,7 @@ class TestImplRaisesTypedNotFoundErrors:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -128,6 +131,7 @@ class TestImplRaisesTypedNotFoundErrors:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "budget": 1000.0}],
             )
@@ -154,6 +158,7 @@ class TestImplRaisesTypedNotFoundErrors:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -173,6 +178,7 @@ class TestImplRaisesTypedNotFoundErrors:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist"}],
             )
@@ -205,7 +211,7 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
             side_effect=AdCPMediaBuyNotFoundError("Media buy 'mb_x' not found."),
         ):
             with pytest.raises(AdcpError) as exc_info:
-                run_delegate_coro(_delegate_update_media_buy("mb_x", {}, ctx))
+                run_delegate_coro(_delegate_update_media_buy("mb_x", required_request_kwargs(), ctx))
 
         assert exc_info.value.code == "MEDIA_BUY_NOT_FOUND"
         assert exc_info.value.recovery == "correctable"
@@ -226,7 +232,10 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
                 run_delegate_coro(
                     _delegate_update_media_buy(
                         "mb_x",
-                        {"packages": [{"package_id": "pkg_z", "paused": True}]},
+                        {
+                            **required_request_kwargs(),
+                            "packages": [{"package_id": "pkg_z", "paused": True}],
+                        },
                         ctx,
                     )
                 )
