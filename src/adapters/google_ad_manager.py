@@ -90,6 +90,11 @@ class GoogleAdManager(AdServerAdapter):
     adapter_name = "google_ad_manager"
 
     capabilities = AdapterCapabilities(
+        supports_inventory_sync=True,  # Via background_sync_service (existing async sync)
+        # supports_reporting_sync stays False — GAM doesn't have a separate
+        # reporting sync; line-item stats are written by gam_orders_service
+        # as part of the inventory sync.
+        reporting_bundled_with_inventory=True,  # Surfaces label on /admin/scheduling
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
     )
 
@@ -339,6 +344,21 @@ class GoogleAdManager(AdServerAdapter):
         if not self.orders_manager:
             raise ValueError("GAM adapter not configured for order operations")
         return self.orders_manager.check_order_has_guaranteed_items(order_id)
+
+    def latest_inventory_sync_at(self) -> datetime | None:
+        """Most-recent successful inventory SyncJob for this tenant.
+
+        Powers the freshness column on the shared ``/admin/scheduling``
+        page. Reads from the existing ``sync_jobs`` table where the
+        async ``background_sync_service`` persists run history.
+        """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.sync_job import SyncJobRepository
+
+        with get_db_session() as session:
+            return SyncJobRepository(session, self.tenant_id).latest_completed_at(
+                adapter_type="google_ad_manager", sync_type="inventory"
+            )
 
     def get_supported_pricing_models(self) -> set[str]:
         """Return set of pricing models GAM adapter supports.
