@@ -87,7 +87,7 @@ class ProductRepository:
     def list_all_with_inventory(self) -> list[Product]:
         """Get all products with pricing, inventory profile, and tenant loaded.
 
-        Used by get_product_catalog which needs full product data for conversion.
+        Used by ``get_product_catalog`` which needs full product data for conversion.
         """
         stmt = (
             select(Product)

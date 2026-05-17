@@ -667,6 +667,183 @@ class GAMTargetingManager:
 
         return unsupported
 
+    def _resolve_audience_signals(
+        self,
+        targeting_overlay,
+        custom_targeting: dict[str, str],
+    ) -> dict[str, Any] | None:
+        """Resolve operator-declared ``TenantSignal``s referenced in the
+        buyer's ``audience_include`` / ``audience_exclude`` to GAM targeting.
+
+        ``TenantSignal.adapter_config`` has two shapes:
+
+        - **Pass-through**: one signal = one adapter primitive.
+          ``{"type": "passthrough", "kind": "audience_segment", "segment_id": ...}``
+          or ``{"type": "passthrough", "kind": "custom_key_value", "key_id": ..., "value_id": ...}``.
+        - **Composed**: one signal = AND of multiple criteria, each pinning
+          a GAM primitive. Each criterion carries its own ``mode``
+          (``include`` / ``exclude``). Composed lets the operator pre-bundle
+          common combinations (e.g. ``premium_sports = vertical=sports AND
+          team IN [team_a, team_b] AND audience_segment=12345``).
+          ``{"type": "composed", "criteria": [{...}, {...}]}``.
+
+        Legacy rows without ``type`` are treated as ``passthrough`` for
+        backward compatibility.
+
+        The signal-outer mode (``audience_include`` vs ``audience_exclude``)
+        XORs with each criterion's mode — putting a signal in
+        ``audience_exclude`` inverts its expression. Unknown signal_ids and
+        unknown ``kind`` values raise :class:`ValueError`.
+
+        Audience-segment criteria surface in ``audienceTargeting`` (a
+        separate GAM line-item block). Custom-KV criteria layer onto the
+        shared ``custom_targeting`` accumulator (NOT_-prefixed for excludes,
+        mirroring the AXE pattern).
+
+        Args:
+            targeting_overlay: AdCP TargetingOverlay carrying the buyer's
+                audience_include / audience_exclude lists.
+            custom_targeting: Mutable accumulator that the caller threads
+                through ``build_targeting``.
+
+        Returns:
+            ``audienceTargeting`` dict for the GAM line item, or ``None``
+            when no signals resolved to audience segments.
+        """
+        include_ids = list(targeting_overlay.audience_include or [])
+        exclude_ids = list(targeting_overlay.audience_exclude or [])
+        if not include_ids and not exclude_ids:
+            return None
+
+        # Lazy import — avoid pulling DB session machinery into the GAM
+        # adapter import path. The targeting manager is built per-request,
+        # so per-call lazy import is fine.
+        from src.core.database.repositories.uow import TenantSignalUoW
+
+        all_ids = list({*include_ids, *exclude_ids})
+        audience_include_segments: list[str] = []
+        audience_exclude_segments: list[str] = []
+
+        # Hold the UoW open across resolution so ORM attribute access
+        # (``signal.adapter_config``) doesn't trip lazy-load on a detached
+        # instance after the session has closed.
+        with TenantSignalUoW(self.tenant_id) as uow:
+            assert uow.tenant_signals is not None
+            signals_by_id = {s.signal_id: s for s in uow.tenant_signals.list_by_ids(all_ids)}
+
+            missing = [sid for sid in all_ids if sid not in signals_by_id]
+            if missing:
+                raise ValueError(
+                    f"Audience targeting references signal(s) not declared on tenant "
+                    f"{self.tenant_id!r}: {', '.join(sorted(missing))}. "
+                    f"Author each signal via POST /api/v1/tenants/<id>/signals first."
+                )
+
+            for signal_id in include_ids:
+                self._apply_signal(
+                    signal=signals_by_id[signal_id],
+                    outer_mode="include",
+                    custom_targeting=custom_targeting,
+                    segment_include=audience_include_segments,
+                    segment_exclude=audience_exclude_segments,
+                )
+            for signal_id in exclude_ids:
+                self._apply_signal(
+                    signal=signals_by_id[signal_id],
+                    outer_mode="exclude",
+                    custom_targeting=custom_targeting,
+                    segment_include=audience_include_segments,
+                    segment_exclude=audience_exclude_segments,
+                )
+
+        if not audience_include_segments and not audience_exclude_segments:
+            return None
+        audience_block: dict[str, Any] = {}
+        if audience_include_segments:
+            audience_block["includedAudienceSegmentIds"] = audience_include_segments
+        if audience_exclude_segments:
+            audience_block["excludedAudienceSegmentIds"] = audience_exclude_segments
+        return audience_block
+
+    @staticmethod
+    def _flip_mode(mode: str) -> str:
+        return "exclude" if mode == "include" else "include"
+
+    def _signal_criteria(self, signal) -> list[dict[str, Any]]:
+        """Normalize ``TenantSignal.adapter_config`` to a list of atomic criteria.
+
+        Both pass-through and composed shapes produce the same downstream
+        criterion list; legacy rows (no ``type``) infer ``passthrough``.
+        Validates required fields per kind.
+        """
+        cfg = signal.adapter_config or {}
+        config_type = cfg.get("type")
+
+        if config_type == "composed":
+            raw_criteria = cfg.get("criteria") or []
+            if not isinstance(raw_criteria, list):
+                raise ValueError(
+                    f"Signal {signal.signal_id!r} type='composed' requires criteria: list, got {type(raw_criteria).__name__}."
+                )
+            return [self._validate_criterion(signal, c) for c in raw_criteria]
+
+        # Pass-through: legacy and explicit. ``kind`` is the discriminator.
+        kind = cfg.get("kind")
+        if kind in ("audience_segment", "custom_key_value"):
+            return [self._validate_criterion(signal, {**cfg, "mode": cfg.get("mode", "include")})]
+
+        raise ValueError(
+            f"Signal {signal.signal_id!r} adapter_config must declare type='passthrough' "
+            f"(with kind) or type='composed' (with criteria). Got type={config_type!r}, kind={kind!r}."
+        )
+
+    def _validate_criterion(self, signal, criterion: dict[str, Any]) -> dict[str, Any]:
+        """Validate one criterion. Returns normalized dict (mode defaulted to include)."""
+        kind = criterion.get("kind")
+        mode = criterion.get("mode", "include")
+        if mode not in ("include", "exclude"):
+            raise ValueError(f"Signal {signal.signal_id!r} criterion has mode={mode!r}; expected include or exclude.")
+        if kind == "audience_segment":
+            if not criterion.get("segment_id"):
+                raise ValueError(f"Signal {signal.signal_id!r} criterion kind='audience_segment' requires segment_id.")
+        elif kind == "custom_key_value":
+            if not criterion.get("key_id"):
+                raise ValueError(f"Signal {signal.signal_id!r} criterion kind='custom_key_value' requires key_id.")
+        else:
+            raise ValueError(
+                f"Signal {signal.signal_id!r} criterion has unknown kind={kind!r} (expected "
+                f"'audience_segment' or 'custom_key_value')."
+            )
+        return {**criterion, "kind": kind, "mode": mode}
+
+    def _apply_signal(
+        self,
+        signal,
+        outer_mode: str,
+        custom_targeting: dict[str, str],
+        segment_include: list[str],
+        segment_exclude: list[str],
+    ) -> None:
+        """Walk one ``TenantSignal``'s criteria and contribute to the right
+        GAM targeting accumulators. Outer mode XORs with criterion mode.
+        """
+        for criterion in self._signal_criteria(signal):
+            effective_mode = criterion["mode"] if outer_mode == "include" else self._flip_mode(criterion["mode"])
+            kind = criterion["kind"]
+            if kind == "audience_segment":
+                target = segment_include if effective_mode == "include" else segment_exclude
+                target.append(str(criterion["segment_id"]))
+            elif kind == "custom_key_value":
+                key_id = criterion["key_id"]
+                # value_id falls back to the signal_id when the operator
+                # hasn't mapped a specific value (rare; usually a binary
+                # signal pre-pinned to one KV pair).
+                value_id = criterion.get("value_id") or signal.signal_id
+                target_key = f"NOT_{key_id}" if effective_mode == "exclude" else str(key_id)
+                custom_targeting[target_key] = str(value_id)
+            else:  # pragma: no cover — _validate_criterion already rejects unknown kinds
+                raise ValueError(f"Signal {signal.signal_id!r} criterion has unsupported kind: {kind!r}")
+
     def build_targeting(self, targeting_overlay) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
 
@@ -883,28 +1060,20 @@ class GAMTargetingManager:
                     "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
                 ) from e
 
+        # Resolve operator-declared signals referenced in audience_include /
+        # audience_exclude BEFORE the custom_targeting accumulator is
+        # finalized — custom-KV-kind signals layer onto the shared dict
+        # (NOT_-prefixed for excludes, mirroring AXE). Audience-segment-kind
+        # signals return a separate ``audienceTargeting`` block.
+        audience_block = self._resolve_audience_signals(targeting_overlay, custom_targeting)
+        if audience_block:
+            gam_targeting["audienceTargeting"] = audience_block
+
         if custom_targeting:
             # Convert simple dict to GAM CustomCriteria structure
             # GAM expects: {logicalOperator, children: [{keyId, operator, valueIds, valueNames}]}
             # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
             gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
-
-        # Audience segment targeting
-        # Map AdCP audiences_any_of and signals to GAM audience segment IDs
-        if targeting_overlay.audiences_any_of or targeting_overlay.signals:
-            # Note: This requires GAM audience segment ID mapping configured per tenant
-            # For now, we fail loudly to indicate it's not fully implemented
-            audience_list = []
-            if targeting_overlay.audiences_any_of:
-                audience_list.extend(targeting_overlay.audiences_any_of)
-            if targeting_overlay.signals:
-                audience_list.extend(targeting_overlay.signals)
-
-            raise ValueError(
-                f"Audience/signal targeting requested but GAM audience segment mapping not configured. "
-                f"Cannot fulfill buyer contract for: {', '.join(audience_list)}. "
-                f"Configure audience segment ID mappings in tenant adapter config to support this targeting."
-            )
 
         # Media type targeting - map to GAM environmentType
         # This should be set on line items, not in targeting dict

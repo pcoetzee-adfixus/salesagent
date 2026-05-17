@@ -13,8 +13,10 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 logger = logging.getLogger(__name__)
 
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
+from adcp.types.generated_poc.signals.get_signals_response import Range
 
 from src.core.auth import get_principal_object
+from src.core.database.models import TenantSignal
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
@@ -37,6 +39,92 @@ def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricing
             {"pricing_option_id": f"cpm_{currency.lower()}", "model": "cpm", "cpm": cpm, "currency": currency}
         )
     ]
+
+
+def _tenant_signal_to_adcp(
+    ts: TenantSignal,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> Signal:
+    """Translate an operator-authored ``TenantSignal`` row to the AdCP ``Signal``
+    wire shape.
+
+    ``adapter_config`` is intentionally elided — operator-authored data, not
+    for storefront consumption. The storefront uses ``value_type`` /
+    ``categories`` / ``range`` to render UI; activation (and any adapter-side
+    resolution) happens through ``activate_signal`` / ``create_media_buy``.
+    """
+    range_obj: Range | None = None
+    if ts.range_min is not None or ts.range_max is not None:
+        range_obj = Range(min=ts.range_min, max=ts.range_max)
+
+    # AdCP's ``signal_id.id`` restricts characters to ``[a-zA-Z0-9_-]+``.
+    # Operators tend to want hierarchical identifiers like
+    # ``audience.sports_fans``; sanitize ``.`` to ``_`` for the wire and use
+    # the same shape for ``signal_agent_segment_id`` so a storefront round-
+    # trips the same identifier through activation.
+    wire_id = ts.signal_id.replace(".", "_")
+
+    # AdCP validates ``signal_id.agent_url`` as a URL; the sample signals
+    # use the public salesagent host. Fall back to the same when the tenant
+    # hasn't set ``public_agent_url`` so projection doesn't fail validation.
+    resolved_agent_url = agent_url or "https://salesagent.adcontextprotocol.org/signals"
+
+    signal_kwargs: dict = {
+        "signal_id": {
+            "source": "agent",
+            "agent_url": resolved_agent_url,
+            "id": wire_id,
+        },
+        "signal_agent_segment_id": wire_id,
+        "name": ts.name,
+        "description": ts.description or "",
+        # Operator-declared signals are the publisher's first-party data
+        # by default. Distinguishing marketplace / custom variants would
+        # warrant a column on TenantSignal — keep the default simple.
+        "signal_type": "owned",
+        "data_provider": ts.data_provider or "publisher",
+        # No coverage measurement yet — declare 100% (signal applies to
+        # any inventory the operator says it applies to) until we wire
+        # up coverage stats.
+        "coverage_percentage": 100.0,
+        "deployments": [
+            SignalDeployment(
+                platform=ad_server or "mock",
+                is_live=True,
+                type="platform",
+            )
+        ],
+        # Publisher's own signals are zero-cost on the publisher's own
+        # inventory. Operators can layer paid signals via the signals-agent
+        # path when those land.
+        "pricing_options": _cpm_pricing_option(0.0),
+    }
+    if ts.value_type:
+        signal_kwargs["value_type"] = ts.value_type
+    if ts.categories:
+        signal_kwargs["categories"] = list(ts.categories)
+    if range_obj is not None:
+        signal_kwargs["range"] = range_obj
+    return Signal.model_validate(signal_kwargs)
+
+
+def _load_tenant_signals(
+    tenant_id: str,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> list[Signal]:
+    """Read operator-authored ``TenantSignal`` rows for the tenant and project
+    them onto the AdCP ``Signal`` shape.
+    """
+    from src.core.database.repositories.uow import TenantSignalUoW
+
+    with TenantSignalUoW(tenant_id) as uow:
+        assert uow.tenant_signals is not None
+        rows = uow.tenant_signals.list_all()
+        return [_tenant_signal_to_adcp(ts, ad_server=ad_server, agent_url=agent_url) for ts in rows]
 
 
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
@@ -156,6 +244,25 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         ),
     ]
 
+    # Merge operator-declared signals from tenant_signals. This is the
+    # publisher's first-party adapter capability map (custom KVs, audience
+    # segments, weather signals, …) projected onto AdCP Signal shape so the
+    # storefront sees the same vocabulary it would from any signals agent.
+    # adapter_config stays operator-side; the wire response carries
+    # value_type / categories / range only.
+    tenant_ad_server = tenant.get("ad_server") if isinstance(tenant, dict) else getattr(tenant, "ad_server", None)
+    tenant_agent_url = (
+        tenant.get("public_agent_url") if isinstance(tenant, dict) else getattr(tenant, "public_agent_url", None)
+    )
+    assert identity.tenant_id is not None  # resolved by transport wrapper
+    sample_signals.extend(
+        _load_tenant_signals(
+            identity.tenant_id,
+            ad_server=tenant_ad_server,
+            agent_url=tenant_agent_url,
+        )
+    )
+
     # Filter based on request parameters using AdCP-compliant fields
     for signal in sample_signals:
         # Apply signal_spec filter (natural language description matching)
@@ -246,54 +353,67 @@ async def _activate_signal_impl(
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet
 
     try:
-        # In a real implementation, this would:
-        # 1. Validate the signal exists and is available
-        # 2. Check if the principal has permission to activate the signal
-        # 3. Communicate with the signal provider's API to activate the signal
-        # 4. Update the campaign or media buy configuration to include the signal
-
-        # Mock implementation for demonstration
-        activation_success = True
-        requires_approval = signal_agent_segment_id.startswith("premium_")
-
+        from src.core.database.repositories.uow import TenantSignalUoW
         from src.core.schemas import Error
 
-        if requires_approval:
-            # Create a human task for approval - return error response
-            errors = [
-                Error(
-                    code="APPROVAL_REQUIRED",
-                    message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
-                )
-            ]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
-                context=context,
-            )
-        elif activation_success:
-            # Success - return activation details
-            decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
+        # Operator-declared signals (the publisher's first-party adapter
+        # capability map) are immediately usable on the publisher's own
+        # inventory — no external provisioning. ``activate_signal`` validates
+        # the signal exists and returns a stable handle the buyer can pass
+        # in ``audience_include`` / ``audience_exclude`` on
+        # ``create_media_buy``. For these signals, the
+        # decisioning_platform_segment_id is the signal_id itself: stable
+        # across calls, no synthetic UUID drift.
+        assert identity.tenant_id is not None  # resolved by transport wrapper
+        with TenantSignalUoW(identity.tenant_id) as uow:
+            assert uow.tenant_signals is not None
+            tenant_signal = uow.tenant_signals.get_by_id(signal_agent_segment_id)
+            # Snapshot the stable signal_id while the row is still
+            # session-bound — accessing it after the UoW exits would trip
+            # DetachedInstanceError on attribute refresh.
+            resolved_signal_id = tenant_signal.signal_id if tenant_signal is not None else None
+
+        if resolved_signal_id is not None:
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details={
-                    "decisioning_platform_segment_id": decisioning_platform_segment_id,
-                    "estimated_activation_duration_minutes": 15.0,
-                    "status": "processing",
+                    "decisioning_platform_segment_id": resolved_signal_id,
+                    "estimated_activation_duration_minutes": 0.0,
+                    "status": "deployed",
                 },
                 errors=None,
                 context=context,
             )
-        else:
-            # Failure
-            errors = [Error(code="ACTIVATION_FAILED", message="Signal provider unavailable")]
+
+        # Fall-through: signal not declared on tenant_signals. Today this
+        # covers the hardcoded sample signals in get_signals (legacy demo
+        # data) — they get the mock activation flow. A future signals-agent
+        # path would call out to an external agent here; for now we preserve
+        # the demo behavior so existing buyers don't break.
+        if signal_agent_segment_id.startswith("premium_"):
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details=None,
-                errors=errors,
+                errors=[
+                    Error(
+                        code="APPROVAL_REQUIRED",
+                        message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
+                    )
+                ],
                 context=context,
             )
+
+        decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
+        return ActivateSignalResponse(
+            signal_id=signal_agent_segment_id,
+            activation_details={
+                "decisioning_platform_segment_id": decisioning_platform_segment_id,
+                "estimated_activation_duration_minutes": 15.0,
+                "status": "processing",
+            },
+            errors=None,
+            context=context,
+        )
 
     except Exception as e:
         logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
