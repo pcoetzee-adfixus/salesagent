@@ -113,6 +113,7 @@ class AIServiceFactory:
         provider = provider_override or config.provider or self._platform_defaults["provider"]
         model_name = model_override or config.model or self._platform_defaults["model"]
         api_key = config.api_key or self._platform_defaults.get("api_key")
+        base_url = config.base_url or self._platform_defaults.get("base_url")
 
         # Configure logfire with tenant token if provided
         if config.logfire_token:
@@ -126,9 +127,11 @@ class AIServiceFactory:
 
         # Create model with Provider that has API key directly configured
         # This avoids setting global environment variables
-        return self._create_provider_model(provider, model_name, api_key)
+        return self._create_provider_model(provider, model_name, api_key, base_url)
 
-    def _create_provider_model(self, provider: str, model_name: str, api_key: str | None) -> Any:
+    def _create_provider_model(
+        self, provider: str, model_name: str, api_key: str | None, base_url: str | None = None
+    ) -> Any:
         """Create a Pydantic AI model with explicit API key via Provider.
 
         This passes the API key directly to the Provider constructor,
@@ -138,6 +141,7 @@ class AIServiceFactory:
             provider: Normalized provider name (e.g., "google-gla", "anthropic")
             model_name: Model name (e.g., "gemini-2.0-flash")
             api_key: API key for the provider
+            base_url: Custom base URL for OpenAI-compatible providers
 
         Returns:
             Configured Model instance
@@ -163,9 +167,19 @@ class AIServiceFactory:
             from pydantic_ai.models.openai import OpenAIChatModel
             from pydantic_ai.providers.openai import OpenAIProvider
 
-            if api_key:
-                return OpenAIChatModel(model_name, provider=OpenAIProvider(api_key=api_key))
+            if api_key or base_url:
+                return OpenAIChatModel(model_name, provider=OpenAIProvider(api_key=api_key, base_url=base_url))
             return OpenAIChatModel(model_name, provider="openai")
+
+        elif provider == "openai-compatible":
+            from pydantic_ai.models.openai import OpenAIChatModel
+            from pydantic_ai.providers.openai import OpenAIProvider
+
+            if not base_url:
+                raise ValueError(
+                    "openai-compatible provider requires base_url (e.g., http://localhost:8080 for llama.cpp)"
+                )
+            return OpenAIChatModel(model_name, provider=OpenAIProvider(api_key=api_key, base_url=base_url))
 
         elif provider == "groq":
             from pydantic_ai.models.groq import GroqModel
@@ -222,8 +236,10 @@ class AIServiceFactory:
         else:
             config = TenantAIConfig()
 
-        # AI is enabled if we have an API key from either source
-        return bool(config.api_key or self._platform_defaults.get("api_key"))
+        # AI is enabled if we have an API key OR base_url (for openai-compatible)
+        has_key = bool(config.api_key or self._platform_defaults.get("api_key"))
+        has_url = bool(config.base_url or self._platform_defaults.get("base_url"))
+        return has_key or has_url
 
     def get_effective_config(
         self,
@@ -249,12 +265,14 @@ class AIServiceFactory:
         provider = config.provider or self._platform_defaults["provider"]
         model = config.model or self._platform_defaults["model"]
         has_api_key = bool(config.api_key or self._platform_defaults.get("api_key"))
+        base_url = config.base_url or self._platform_defaults.get("base_url")
         has_logfire = bool(config.logfire_token or self._platform_defaults.get("logfire_token"))
 
         return {
             "provider": provider,
             "model": model,
             "has_api_key": has_api_key,
+            "base_url": base_url,
             "has_logfire": has_logfire,
             "settings": config.settings,
             "source": "tenant" if config.provider else "platform",

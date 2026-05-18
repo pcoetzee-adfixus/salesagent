@@ -30,6 +30,9 @@ class TenantAIConfig(BaseModel):
     # API key (encrypted in database, decrypted when loaded)
     api_key: str | None = None
 
+    # Custom base URL for OpenAI-compatible providers (llama.cpp, Ollama, etc.)
+    base_url: str | None = None
+
     # Observability
     logfire_token: str | None = None
 
@@ -43,10 +46,12 @@ def get_platform_defaults() -> dict:
     Returns:
         dict with platform default settings
     """
+    provider = os.getenv("PYDANTIC_AI_PROVIDER", "gemini")
     return {
-        "provider": os.getenv("PYDANTIC_AI_PROVIDER", "gemini"),
+        "provider": provider,
         "model": os.getenv("PYDANTIC_AI_MODEL", "gemini-2.0-flash"),
-        "api_key": _get_provider_api_key(os.getenv("PYDANTIC_AI_PROVIDER", "gemini")),
+        "api_key": _get_provider_api_key(provider),
+        "base_url": os.getenv("OPENAI_BASE_URL"),
         "logfire_token": os.getenv("LOGFIRE_TOKEN"),
     }
 
@@ -63,6 +68,7 @@ def _get_provider_api_key(provider: str) -> str | None:
     provider_env_vars = {
         "gemini": "GEMINI_API_KEY",
         "openai": "OPENAI_API_KEY",
+        "openai-compatible": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "groq": "GROQ_API_KEY",
         "bedrock": "AWS_ACCESS_KEY_ID",  # Bedrock uses AWS credentials
