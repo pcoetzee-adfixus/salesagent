@@ -94,6 +94,255 @@ class TestMappedIndex:
         assert kv_idx == {}
 
 
+class TestCompositeValidator:
+    """The composite-builder form validator wraps the TargetingWidget's
+    groups payload into a ``kind="gam_targeting_groups"`` adapter_config.
+    """
+
+    def test_groups_payload_translated_to_adapter_config(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {
+            "key_value_pairs": {
+                "groups": [
+                    {
+                        "criteria": [
+                            {"keyId": "11111", "values": ["22222", "33333"]},
+                            {"keyId": "44444", "values": ["55555"], "exclude": True},
+                        ]
+                    }
+                ]
+            }
+        }
+        _, errors, parsed = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Premium sports",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps(payload),
+                }
+            )
+        )
+        assert errors == {}
+        assert parsed["name"] == "Premium sports"
+        assert parsed["adapter_config"]["kind"] == "gam_targeting_groups"
+        assert parsed["adapter_config"]["groups"] == payload["key_value_pairs"]["groups"]
+        assert parsed["value_type"] == "binary"
+
+    def test_missing_name_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "X", "values": ["Y"]}]}]}}
+        _, errors, _ = _validate_composite_form(MultiDict({"targeting_data": json.dumps(payload)}))
+        assert "name" in errors
+
+    def test_empty_groups_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        _, errors, _ = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Empty",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps({"key_value_pairs": {"groups": []}}),
+                }
+            )
+        )
+        assert "targeting_data" in errors
+
+    def test_criterion_missing_values_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "X", "values": []}]}]}}
+        _, errors, _ = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Bad",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps(payload),
+                }
+            )
+        )
+        assert "targeting_data" in errors
+
+
+class TestCompositeAudienceValidator:
+    """The new audience-segment composition path on /signals/composite.
+    Emits ``type=composed`` with audience_segment criteria (matching #439's
+    materializer shape). Single pick collapses to a pass-through."""
+
+    def test_single_segment_pick_is_passthrough(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        picks = [{"segment_id": "98765", "mode": "include"}]
+        _, errors, parsed = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Sports only",
+                    "composite_source": "audience",
+                    "audience_picks": json.dumps(picks),
+                }
+            )
+        )
+        assert errors == {}
+        assert parsed["adapter_config"] == {
+            "type": "passthrough",
+            "kind": "audience_segment",
+            "segment_id": "98765",
+            "mode": "include",
+        }
+
+    def test_multiple_picks_compose_to_and(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        picks = [
+            {"segment_id": "111", "mode": "include"},
+            {"segment_id": "222", "mode": "exclude"},
+        ]
+        _, errors, parsed = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Sports AND not junk",
+                    "composite_source": "audience",
+                    "audience_picks": json.dumps(picks),
+                }
+            )
+        )
+        assert errors == {}
+        assert parsed["adapter_config"]["type"] == "composed"
+        assert len(parsed["adapter_config"]["criteria"]) == 2
+        assert parsed["adapter_config"]["criteria"][1]["mode"] == "exclude"
+
+    def test_empty_audience_picks_rejected(self):
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        _, errors, _ = _validate_composite_form(
+            MultiDict({"name": "Empty", "composite_source": "audience", "audience_picks": "[]"})
+        )
+        assert "audience_picks" in errors
+
+
+class TestMappingSummary:
+    """``_summarize_adapter_config`` decodes the adapter_config shape into
+    operator-readable text on the edit page so operators don't crack
+    open the JSON to understand what a signal targets."""
+
+    def test_audience_segment_resolves_to_synced_name(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import GAMInventoryFactory, TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            tenant = TenantFactory(tenant_id="map_t1", ad_server="google_ad_manager")
+            GAMInventoryFactory(
+                tenant=tenant,
+                inventory_type="audience_segment",
+                inventory_id="98765",
+                name="Sports Enthusiasts",
+                inventory_metadata={"type": "FIRST_PARTY"},
+            )
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {"type": "passthrough", "kind": "audience_segment", "segment_id": "98765"},
+                GAMSyncRepository(session, "map_t1"),
+            )
+        assert summary["label"] == "GAM audience segment"
+        assert summary["raw_kind"] == "audience_segment"
+        # The name is interpolated from synced inventory.
+        assert "Sports Enthusiasts" in summary["rows"][0]["value"]
+
+    def test_unsynced_segment_falls_back_to_id(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t2", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {"kind": "audience_segment", "segment_id": "11111"},
+                GAMSyncRepository(session, "map_t2"),
+            )
+        assert "(unsynced)" in summary["rows"][0]["value"]
+        assert "11111" in summary["rows"][0]["value"]
+
+    def test_composed_signal_lists_criteria(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t3", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {
+                    "type": "composed",
+                    "criteria": [
+                        {"kind": "audience_segment", "segment_id": "111", "mode": "include"},
+                        {"kind": "audience_segment", "segment_id": "222", "mode": "exclude"},
+                    ],
+                },
+                GAMSyncRepository(session, "map_t3"),
+            )
+        assert summary["raw_kind"] == "composed"
+        assert len(summary["rows"]) == 2
+        assert "EXCLUDE" in summary["rows"][1]["value"]
+
+    def test_composite_groups_summary(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t4", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": [
+                        {
+                            "criteria": [
+                                {"keyId": "11111", "values": ["22222", "33333"]},
+                                {"keyId": "44444", "values": ["55555"], "exclude": True},
+                            ]
+                        },
+                    ],
+                },
+                GAMSyncRepository(session, "map_t4"),
+            )
+        assert summary["raw_kind"] == "gam_targeting_groups"
+        # 1 group, 2 criteria
+        assert "1 group(s), 2 criterion(a)" in summary["label"]
+        assert "NOT IN" in summary["rows"][0]["value"]
+
+
 class TestBulkCreate:
     """End-to-end exercise of the repository + factory pattern. The HTTP
     boundary lives in the blueprint; this tests the data-shaping logic

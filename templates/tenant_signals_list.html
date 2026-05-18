@@ -43,21 +43,24 @@
         <div class="card-header d-flex align-items-center justify-content-between">
             <h5 class="mb-0">Map targeting to signals</h5>
             <ul class="nav nav-pills nav-sm" role="tablist">
+                {% set seg_unmapped = segments | rejectattr('mapped_signal_id') | list | length %}
                 <li class="nav-item" role="presentation">
                     <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#segments-tab" type="button" role="tab">
-                        Audience segments ({{ segments | length }})
+                        Audience segments
+                        {% if seg_unmapped %}<span class="badge bg-primary ms-1">{{ seg_unmapped }} unmapped</span>{% endif %}
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#keys-tab" type="button" role="tab">
-                        Custom keys ({{ keys | length }})
+                        Custom keys
+                        <span class="text-muted small">({{ keys | length }})</span>
                     </button>
                 </li>
             </ul>
         </div>
         <div class="card-body p-0">
             <div class="tab-content">
-                {# ----- Segments tab ----- #}
+                {# ----- Segments tab — shows UN-mapped only ----- #}
                 <div class="tab-pane show active" id="segments-tab" role="tabpanel">
                     {% if segments %}
                     <table class="table table-sm table-hover mb-0">
@@ -72,26 +75,14 @@
                         </thead>
                         <tbody>
                             {% for s in segments %}
-                            <tr {% if s.mapped_signal_id %}class="table-active text-muted"{% endif %}>
+                            <tr>
                                 <td>
-                                    {% if s.mapped_signal_id %}
-                                    <input type="checkbox" class="form-check-input" disabled checked>
-                                    {% else %}
                                     <input type="checkbox" class="form-check-input bulk-map-row"
                                            data-kind="audience_segment"
                                            data-segment-id="{{ s.id }}"
                                            data-segment-name="{{ s.name }}">
-                                    {% endif %}
                                 </td>
-                                <td>
-                                    {{ s.name }}
-                                    {% if s.mapped_signal_id %}
-                                    <a class="badge bg-success text-decoration-none ms-2"
-                                       href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped_signal_id) }}">
-                                        Mapped — {{ s.mapped_signal_name }}
-                                    </a>
-                                    {% endif %}
-                                </td>
+                                <td>{{ s.name }}</td>
                                 <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
                                 <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
                                 <td class="text-muted small font-monospace">{{ s.id }}</td>
@@ -99,8 +90,19 @@
                             {% endfor %}
                         </tbody>
                     </table>
+                    {% if mapped_segments_count %}
+                    <div class="p-2 text-center small text-muted bg-light border-top">
+                        {{ mapped_segments_count }} segment(s) already mapped — see the <strong>Existing signals</strong> list below to manage them.
+                    </div>
+                    {% endif %}
                     {% else %}
-                    <div class="p-4 text-center text-muted">No audience segments synced. Run inventory sync to load them.</div>
+                    <div class="p-4 text-center text-muted">
+                        {% if mapped_segments_count %}
+                        All {{ mapped_segments_count }} synced segments are mapped. Manage them in <strong>Existing signals</strong> below.
+                        {% else %}
+                        No audience segments synced. Run inventory sync to load them.
+                        {% endif %}
+                    </div>
                     {% endif %}
                 </div>
 
@@ -143,9 +145,14 @@
         </div>
         <div class="card-footer d-flex justify-content-between align-items-center">
             <div class="text-muted small" id="bulk-footer-hint">Pick rows to map — they'll become signals on save.</div>
-            <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
-                Create <span id="bulk-selection-count" class="d-none"></span> signals
-            </button>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="btn btn-outline-secondary">
+                    Build composite signal
+                </a>
+                <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
+                    Create <span id="bulk-selection-count" class="d-none"></span> signals
+                </button>
+            </div>
         </div>
     </div>
     {% endif %}
@@ -166,8 +173,6 @@
                     <tr>
                         <th>Name</th>
                         <th class="signal-id-col d-none">signal_id</th>
-                        <th>Kind</th>
-                        <th>Type</th>
                         <th>Updated</th>
                         <th></th>
                     </tr>
@@ -175,14 +180,15 @@
                 <tbody>
                     {% for s in signals %}
                     <tr>
-                        <td>{{ s.name }}</td>
-                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
                         <td>
-                            <span class="badge bg-light text-dark">
-                            {% if s.is_complex %}complex{% elif s.is_composed %}composed{% else %}{{ s.adapter_kind or "—" }}{% endif %}
-                            </span>
+                            {{ s.name }}
+                            {% if s.is_complex %}
+                            <span class="badge bg-light text-dark ms-1">composite</span>
+                            {% elif s.is_composed %}
+                            <span class="badge bg-light text-dark ms-1">composed</span>
+                            {% endif %}
                         </td>
-                        <td>{{ s.value_type }}</td>
+                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
                         <td class="small text-muted">{{ s.updated_at.strftime("%Y-%m-%d") if s.updated_at else "—" }}</td>
                         <td class="text-end">
                             <a class="btn btn-sm btn-outline-secondary"
