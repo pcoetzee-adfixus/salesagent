@@ -793,8 +793,6 @@ def test_auth():
     tenant_id = request.form.get("tenant_id")
 
     # In single-tenant mode, default to "default" tenant if not specified
-    from src.core.config_loader import is_single_tenant_mode
-
     if not tenant_id:
         tenant_id = "default"
 

@@ -3,9 +3,14 @@
 {% block title %}Mock Adapter Configuration - {{ product.name }}{% endblock %}
 
 {% block content %}
+<div class="container">
 <div class="card">
-    <h2>Mock Adapter Configuration</h2>
-    <p>Configure testing parameters for: <strong>{{ product.name }}</strong></p>
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Mock Adapter Configuration</h2>
+            <p class="sa-page-header__subtitle">Configure testing parameters for: <strong>{{ product.name }}</strong></p>
+        </div>
+    </header>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
@@ -212,4 +217,5 @@ document.getElementById('test_mode').addEventListener('change', function() {
 
 // Test mode auto-adjustment remains
 </script>
+</div>
 {% endblock %}

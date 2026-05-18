@@ -41,12 +41,16 @@
     .small { font-size: 0.85em; }
 </style>
 
-<div class="sk-section">
-    <h2>🔑 Signing keys</h2>
-    <p class="sk-section-help">
-        Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against
-        a public JWKS you publish on <strong>your own domain</strong>. Two steps:
-    </p>
+<div class="container">
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Signing Keys</h2>
+        <p class="sa-page-header__subtitle">
+            Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against
+            a public JWKS you publish on <strong>your own domain</strong>.
+        </p>
+    </div>
+</header>
     <ol class="small text-muted" style="margin: 0.25rem 0 1rem 1.25rem;">
         <li>Publish the JWK below as a JWKS document (<code>{"keys": [&hellip;]}</code>) at a URL you control —
             typically <code>https://&lt;your-house-domain&gt;/.well-known/jwks.json</code>.
@@ -132,5 +136,6 @@
         </table>
     </div>
     {% endif %}
+</div>
 </div>
 {% endblock %}

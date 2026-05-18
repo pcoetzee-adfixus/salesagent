@@ -3,36 +3,40 @@
 {% block title %}Creative Management - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+<div class="container">
+    <header class="sa-page-header">
         <div>
-            <h2>🎨 Creative Management - {{ tenant_name }}</h2>
-            <p style="margin: 0.5rem 0 0 0; color: #666;">View, review, and manage all uploaded creatives</p>
+            <h2 class="sa-page-header__title">Creatives</h2>
+            <p class="sa-page-header__subtitle">Review and manage all uploaded creatives</p>
         </div>
-        <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Dashboard</a>
-    </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">
+                ← Back to Dashboard
+            </a>
+        </div>
+    </header>
 
-    <!-- Summary Stats -->
+    <!-- Summary Cards -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
         {% set pending_count = creatives|selectattr('status', 'equalto', 'pending')|list|length %}
         {% set approved_count = creatives|selectattr('status', 'equalto', 'approved')|list|length %}
         {% set rejected_count = creatives|selectattr('status', 'equalto', 'rejected')|list|length %}
 
-        <div style="padding: 1rem; background: #fff7ed; border-radius: 8px; border-left: 4px solid #f59e0b;">
-            <div style="font-size: 2rem; font-weight: bold; color: #f59e0b;">{{ pending_count }}</div>
-            <div style="color: #666;">Pending Review</div>
+        <div class="card" style="text-align: center;">
+            <h3 style="margin: 0; color: #f59e0b;">{{ pending_count }}</h3>
+            <p style="margin: 0.5rem 0 0 0; color: #666;">Pending Review</p>
         </div>
-        <div style="padding: 1rem; background: #f0fdf4; border-radius: 8px; border-left: 4px solid #10b981;">
-            <div style="font-size: 2rem; font-weight: bold; color: #10b981;">{{ approved_count }}</div>
-            <div style="color: #666;">Approved</div>
+        <div class="card" style="text-align: center;">
+            <h3 style="margin: 0; color: #10b981;">{{ approved_count }}</h3>
+            <p style="margin: 0.5rem 0 0 0; color: #666;">Approved</p>
         </div>
-        <div style="padding: 1rem; background: #fef2f2; border-radius: 8px; border-left: 4px solid #ef4444;">
-            <div style="font-size: 2rem; font-weight: bold; color: #ef4444;">{{ rejected_count }}</div>
-            <div style="color: #666;">Rejected</div>
+        <div class="card" style="text-align: center;">
+            <h3 style="margin: 0; color: #ef4444;">{{ rejected_count }}</h3>
+            <p style="margin: 0.5rem 0 0 0; color: #666;">Rejected</p>
         </div>
-        <div style="padding: 1rem; background: #f8fafc; border-radius: 8px; border-left: 4px solid #64748b;">
-            <div style="font-size: 2rem; font-weight: bold; color: #64748b;">{{ creatives|length }}</div>
-            <div style="color: #666;">Total Creatives</div>
+        <div class="card" style="text-align: center;">
+            <h3 style="margin: 0; color: #64748b;">{{ creatives|length }}</h3>
+            <p style="margin: 0.5rem 0 0 0; color: #666;">Total Creatives</p>
         </div>
     </div>
 

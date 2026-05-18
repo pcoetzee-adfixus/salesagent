@@ -3,17 +3,17 @@
 {% block title %}Sync Inventory - {{ tenant.name }} Sales Agent{% endblock %}
 
 {% block content %}
-<div class="container-fluid mt-4">
-    <div class="row">
-        <div class="col-12">
-            <h2>Sync Inventory</h2>
-            <p class="text-muted">
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Sync Inventory</h2>
+            <p class="sa-page-header__subtitle">
                 Pull ad units, placements, labels, custom targeting keys, and audience segments from your ad server.
                 Browse the synced inventory under <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant.tenant_id) }}">Browse Inventory</a>
                 or <a href="{{ url_for('inventory.targeting_browser', tenant_id=tenant.tenant_id) }}">Targeting Criteria</a>.
             </p>
         </div>
-    </div>
+    </header>
 
     {% if not is_gam %}
     <div class="alert alert-warning mt-3">

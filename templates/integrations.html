@@ -30,15 +30,18 @@
     .alert-info { background: #dbeafe; border: 1px solid #3b82f6; color: #1e40af; }
 </style>
 
+<div class="container">
 <div id="settings-config"
      data-script-name="{{ request.script_root }}"
      data-tenant-id="{{ tenant.tenant_id }}"
      style="display: none;"></div>
 
-<div class="settings-header">
-    <h2>Integrations</h2>
-    <p>Connect external services and configure webhooks</p>
-</div>
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Integrations</h2>
+        <p class="sa-page-header__subtitle">Connect external services and configure webhooks</p>
+    </div>
+</header>
 
 {# Headless capability: hidden when the storefront centralizes Slack notifications. #}
 {% if publisher_owns('slack') %}
@@ -485,6 +488,7 @@
     </div>
 </div>
 {% endif %}
+</div>
 
 <script src="{{ url_for('static', filename='js/integrations.js') }}"></script>
 {% endblock %}

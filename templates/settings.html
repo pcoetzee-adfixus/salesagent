@@ -3,8 +3,13 @@
 {% block title %}Settings - Sales Agent Admin{% endblock %}
 
 {% block content %}
+<div class="container">
 <div class="card">
-    <h2>Tenant Management Settings</h2>
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Tenant Management Settings</h2>
+        </div>
+    </header>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -69,5 +74,6 @@
 
         <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
     </div>
+</div>
 </div>
 {% endblock %}

@@ -34,16 +34,20 @@
     .alert-info { background: #dbeafe; border: 1px solid #3b82f6; color: #1e40af; }
 </style>
 
+<div class="container">
 <div id="settings-config"
      data-script-name="{{ request.script_root }}"
      data-tenant-id="{{ tenant.tenant_id }}"
      style="display: none;"></div>
 
-<div class="pw-section">
-    <h2>Policies & Workflows</h2>
-    <p class="pw-section-help">
-        Configure how your organization operates: budgets, naming conventions, approval workflows.
-    </p>
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Policies & Workflows</h2>
+        <p class="sa-page-header__subtitle">
+            Configure how your organization operates: budgets, naming conventions, approval workflows.
+        </p>
+    </div>
+</header>
 
 <form id="business-rules-form">
     <!-- Budget Controls -->
@@ -789,6 +793,7 @@ Exclude any products that don't match the brand's tone.</pre>
     </div>
 </div>
 {% endif %}
+</div>
 
 <script src="{{ url_for('static', filename='js/policies_and_workflows.js') }}"></script>
 {% endblock %}

@@ -3,14 +3,17 @@
 {% block title %}Signals Agents - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>Signals Discovery Agents - {{ tenant_name }}</h2>
-        <div style="display: flex; gap: 0.5rem;">
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Signals Agents</h2>
+            <p class="sa-page-header__subtitle">Configure external signals discovery agents for enhanced targeting</p>
+        </div>
+        <div class="sa-page-header__actions">
             <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant_id) }}#integrations" class="btn btn-secondary">← Back to Settings</a>
             <a href="{{ url_for('signals_agents.add_signals_agent', tenant_id=tenant_id) }}" class="btn btn-primary">Add Signals Agent</a>
         </div>
-    </div>
+    </header>
 
     <!-- Custom Tenant Signals Agents -->
     {% if custom_agents|length == 0 %}

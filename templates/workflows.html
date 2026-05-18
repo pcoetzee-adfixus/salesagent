@@ -4,15 +4,17 @@
 
 {% block content %}
 <div class="container">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <header class="sa-page-header">
         <div>
-            <h1 style="margin: 0;">Workflows Dashboard</h1>
-            <p style="color: #666; margin: 0.5rem 0 0 0;">Monitor all media buys, tasks, and system activity for {{ tenant.name }}</p>
+            <h2 class="sa-page-header__title">Workflows</h2>
+            <p class="sa-page-header__subtitle">Monitor all media buys, tasks, and system activity for {{ tenant.name }}</p>
         </div>
-        <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">
-            ← Back to Dashboard
-        </a>
-    </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">
+                ← Back to Dashboard
+            </a>
+        </div>
+    </header>
 
     <!-- Summary Cards -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">

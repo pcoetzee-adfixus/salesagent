@@ -288,7 +288,7 @@
     }
 </style>
 
-
+<div class="container">
 {% macro advertiser_label(adv_id) -%}
 {%- if not adv_id -%}—
 {%- elif advertiser_names.get(adv_id) -%}
@@ -305,7 +305,7 @@
 
 <header class="sa-page-header">
     <div>
-        <h1 class="sa-page-header__title">Buyer Routing</h1>
+        <h2 class="sa-page-header__title">Buyer Routing</h2>
         <p class="sa-page-header__subtitle">
             Decide which (operator, brand) triples land on which GAM advertiser.
             The default catches anything no rule matches.
@@ -1008,5 +1008,6 @@
     });
 })();
 </script>
+</div>
 
 {% endblock %}
