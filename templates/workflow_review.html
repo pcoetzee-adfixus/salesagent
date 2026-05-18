@@ -4,13 +4,16 @@
 
 {% block content %}
 <div class="container" style="max-width: 1200px; margin: 2rem auto; padding: 0 1rem;">
-    <div style="margin-bottom: 2rem;">
-        <a href="{{ script_name }}/tenant/{{ tenant_id }}" style="text-decoration: none; color: #6b7280;">
-            ← Back to Dashboard
-        </a>
-    </div>
-
-    <h1 style="margin-bottom: 2rem;">Workflow Step Review</h1>
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Workflow Step Review</h2>
+        </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ script_name }}/tenant/{{ tenant_id }}" class="btn btn-secondary">
+                ← Back to Dashboard
+            </a>
+        </div>
+    </header>
 
     <!-- Status Badge -->
     <div style="margin-bottom: 2rem;">

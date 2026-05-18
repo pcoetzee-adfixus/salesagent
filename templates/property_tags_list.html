@@ -3,21 +3,19 @@
 {% block title %}Property Tags - {{ tenant.name }}{% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-    <div class="row">
-        <div class="col-md-12">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h2>Property Tags</h2>
-                    <p class="text-muted">Manage tags for categorizing authorized properties</p>
-                </div>
-                <div>
-                    <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}#publishers-tab"
-                       class="btn btn-outline-secondary">
-                        <i class="fas fa-arrow-left"></i> Back to Publishers & Properties
-                    </a>
-                </div>
-            </div>
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Property Tags</h2>
+            <p class="sa-page-header__subtitle">Manage tags for categorizing authorized properties</p>
+        </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}#publishers-tab"
+               class="btn btn-outline-secondary">
+                ← Back to Publishers & Properties
+            </a>
+        </div>
+    </header>
 
             <div class="row">
                 <!-- Create New Tag -->

@@ -3,23 +3,21 @@
 {% block title %}Webhook Delivery Activity - {{ tenant.name }}{% endblock %}
 
 {% block content %}
-<div class="container-fluid mt-4">
-    <div class="row">
-        <div class="col-12">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h2><i class="fas fa-bell"></i> Webhook Delivery Activity</h2>
-                    <p class="text-muted">Monitor delivery webhook notifications for {{ tenant.name }}</p>
-                </div>
-                <div class="d-flex gap-2">
-                    <a href="{{ url_for('principals.list_principals', tenant_id=tenant.tenant_id) }}" class="btn btn-outline-primary">
-                        <i class="fas fa-users"></i> Advertisers
-                    </a>
-                    <a href="{{ url_for('tenants.dashboard', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
-                        <i class="fas fa-arrow-left"></i> Back to Dashboard
-                    </a>
-                </div>
-            </div>
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Webhook Activity</h2>
+            <p class="sa-page-header__subtitle">Monitor delivery webhook notifications for {{ tenant.name }}</p>
+        </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('principals.list_principals', tenant_id=tenant.tenant_id) }}" class="btn btn-outline-primary">
+                Advertisers
+            </a>
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
+                ← Back to Dashboard
+            </a>
+        </div>
+    </header>
 
             <!-- Summary Stats -->
             <div class="row mb-4">

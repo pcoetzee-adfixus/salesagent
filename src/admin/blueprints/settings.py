@@ -660,6 +660,7 @@ def update_ai(tenant_id):
         provider = request.form.get("ai_provider", "gemini").strip()
         model = request.form.get("ai_model", "").strip()
         api_key = request.form.get("ai_api_key", "").strip()
+        base_url = request.form.get("ai_base_url", "").strip()
         logfire_token = request.form.get("logfire_token", "").strip()
 
         with get_db_session() as db_session:
@@ -690,6 +691,12 @@ def update_ai(tenant_id):
             if existing_config.get("settings"):
                 new_config["settings"] = existing_config["settings"]
 
+            # Handle base_url: use new one if provided, otherwise keep existing
+            if base_url:
+                new_config["base_url"] = base_url
+            elif existing_config.get("base_url"):
+                new_config["base_url"] = existing_config["base_url"]
+
             # Handle Logfire token: use new one if provided, otherwise keep existing
             # Skip placeholder value that indicates existing token
             if logfire_token and logfire_token != "••••••••":
@@ -703,7 +710,7 @@ def update_ai(tenant_id):
             db_session.commit()
 
             provider_name = provider.title()
-            if new_config.get("api_key"):
+            if new_config.get("api_key") or new_config.get("base_url"):
                 flash(f"AI settings saved. {provider_name} ({model}) is now configured.", "success")
             else:
                 flash(
@@ -746,6 +753,7 @@ def test_ai_connection(tenant_id):
         provider = data.get("provider", "gemini")
         model = data.get("model", "gemini-2.0-flash")
         api_key = data.get("api_key", "").strip()
+        base_url = data.get("base_url", "").strip()
 
         # Build config for testing
         test_config = {"provider": provider, "model": model}
@@ -763,8 +771,13 @@ def test_ai_connection(tenant_id):
             elif tenant.gemini_api_key and provider == "gemini":
                 test_config["api_key"] = tenant.gemini_api_key
 
-        if not test_config.get("api_key"):
-            return jsonify({"success": False, "error": "No API key provided"}), 400
+            if base_url:
+                test_config["base_url"] = base_url
+            elif tenant.ai_config and tenant.ai_config.get("base_url"):
+                test_config["base_url"] = tenant.ai_config["base_url"]
+
+        if not test_config.get("api_key") and not test_config.get("base_url"):
+            return jsonify({"success": False, "error": "No API key or base URL provided"}), 400
 
         # Create factory and set up credentials
         factory = AIServiceFactory()
@@ -913,11 +926,29 @@ def get_ai_models(tenant_id):
     for provider in by_provider:
         by_provider[provider] = sorted(set(by_provider[provider]))
 
+    # Add synthetic models for openai-compatible (local LLM endpoints don't register with Pydantic AI)
+    if "openai-compatible" not in by_provider:
+        by_provider["openai-compatible"] = [
+            "llama3",
+            "llama3.1",
+            "llama3.2",
+            "mistral",
+            "mixtral",
+            "gemma",
+            "qwen",
+            "phi",
+            "deepseek",
+        ]
+
     # Define provider metadata for UI
     provider_info = {
         "google-gla": {"name": "Google Gemini", "key_url": "https://aistudio.google.com/app/apikey"},
         "anthropic": {"name": "Anthropic Claude", "key_url": "https://console.anthropic.com/settings/keys"},
         "openai": {"name": "OpenAI", "key_url": "https://platform.openai.com/api-keys"},
+        "openai-compatible": {
+            "name": "OpenAI Compatible (llama.cpp/Ollama)",
+            "key_url": "https://github.com/ggml-org/llama.cpp",
+        },
         "groq": {"name": "Groq", "key_url": "https://console.groq.com/keys"},
         "mistral": {"name": "Mistral AI", "key_url": "https://console.mistral.ai/api-keys"},
         "deepseek": {"name": "DeepSeek", "key_url": "https://platform.deepseek.com/api_keys"},

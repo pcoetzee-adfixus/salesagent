@@ -30,15 +30,18 @@
     .alert-info { background: #dbeafe; border: 1px solid #3b82f6; color: #1e40af; }
 </style>
 
+<div class="container">
 <div id="settings-config"
      data-script-name="{{ request.script_root }}"
      data-tenant-id="{{ tenant.tenant_id }}"
      style="display: none;"></div>
 
-<div class="settings-header">
-    <h2>Integrations</h2>
-    <p>Connect external services and configure webhooks</p>
-</div>
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Integrations</h2>
+        <p class="sa-page-header__subtitle">Connect external services and configure webhooks</p>
+    </div>
+</header>
 
 {# Headless capability: hidden when the storefront centralizes Slack notifications. #}
 {% if publisher_owns('slack') %}
@@ -104,9 +107,10 @@
     </p>
 
     {% set ai_config = tenant.ai_config or {} %}
-    {% set has_ai = ai_config.get('api_key') or tenant.gemini_api_key %}
+    {% set has_ai = ai_config.get('api_key') or ai_config.get('base_url') or tenant.gemini_api_key %}
     {% set current_provider = ai_config.get('provider', 'gemini') %}
     {% set current_model = ai_config.get('model', '') %}
+    {% set current_base_url = ai_config.get('base_url', '') %}
 
     {% if not has_ai %}
     <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
@@ -158,6 +162,17 @@
             </small>
         </div>
 
+        <div class="form-group" id="ai_base_url_group" style="display: none;">
+            <label for="ai_base_url">Base URL</label>
+            <input type="url" id="ai_base_url" name="ai_base_url"
+                   placeholder="http://localhost:8080"
+                   value="{{ current_base_url or '' }}">
+            <small>
+                The URL of your OpenAI-compatible API endpoint (llama.cpp, Ollama, etc.).
+                API key is optional for local endpoints.
+            </small>
+        </div>
+
         <div class="form-group">
             <label for="logfire_token">Logfire Token (Optional)</label>
             <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
@@ -192,7 +207,7 @@
 
     // Preferred order for providers (most common first)
     const providerOrder = [
-        'google-gla', 'anthropic', 'openai', 'groq', 'mistral', 'deepseek', 'grok',
+        'google-gla', 'anthropic', 'openai', 'openai-compatible', 'groq', 'mistral', 'deepseek', 'grok',
         'cohere', 'bedrock', 'google-vertex', 'huggingface', 'cerebras', 'moonshotai', 'heroku',
         // Gateway providers at the end
         'gateway/anthropic', 'gateway/openai', 'gateway/bedrock', 'gateway/google-vertex', 'gateway/groq'
@@ -293,6 +308,14 @@
         } else {
             apiKeyLink.style.display = 'none';
         }
+
+        // Show/hide base URL field for OpenAI-compatible providers
+        const baseUrlGroup = document.getElementById('ai_base_url_group');
+        if (provider === 'openai' || provider === 'openai-compatible') {
+            baseUrlGroup.style.display = 'block';
+        } else {
+            baseUrlGroup.style.display = 'none';
+        }
     }
 
     function updateStatusBar() {
@@ -317,6 +340,7 @@
         const provider = document.getElementById('ai_provider').value;
         const model = document.getElementById('ai_model').value;
         const apiKey = document.getElementById('ai_api_key').value;
+        const baseUrl = document.getElementById('ai_base_url').value;
 
         resultDiv.style.display = 'block';
         resultDiv.style.background = '#f3f4f6';
@@ -328,7 +352,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
-                body: JSON.stringify({ provider, model, api_key: apiKey })
+                body: JSON.stringify({ provider, model, api_key: apiKey, base_url: baseUrl })
             });
 
             // Handle authentication errors
@@ -464,6 +488,7 @@
     </div>
 </div>
 {% endif %}
+</div>
 
 <script src="{{ url_for('static', filename='js/integrations.js') }}"></script>
 {% endblock %}

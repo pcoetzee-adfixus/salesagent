@@ -9,6 +9,7 @@ The Prebid Sales Agent is a server that:
 - **Integrates with ad servers** like Google Ad Manager
 - **Provides an admin interface** for managing inventory and campaigns
 - **Handles the full campaign lifecycle** from discovery to reporting
+- **Supports local LLM inference** via OpenAI-compatible providers (llama.cpp, Ollama, etc.)
 
 ## Choose Your Path
 
@@ -168,6 +169,29 @@ docker compose logs adcp-server | head -50
 - **REST API** - Programmatic tenant management
 - **Docker Deployment** - Easy local and production setup
 - **Comprehensive Testing** - Unit, integration, and E2E tests
+
+### Local LLM Support
+The sales agent supports local LLM inference via OpenAI-compatible providers:
+
+**llama.cpp:**
+```bash
+# Start llama.cpp server
+./llama-server -m your-model.gguf --host 0.0.0.0 --port 8080
+```
+
+**Ollama:**
+```bash
+# Start Ollama (runs on port 11434 by default)
+ollama serve
+```
+
+Configure via Admin UI → Settings → AI:
+1. Select "OpenAI Compatible (llama.cpp/Ollama)" provider
+2. Set Base URL to your endpoint (e.g., `http://localhost:8080` for llama.cpp)
+3. Set model name (e.g., `llama3`, `mistral`, `gemma`)
+4. API key is optional for local endpoints
+
+This enables fully self-hosted AI features without external API dependencies.
 
 ## Protocol Support
 

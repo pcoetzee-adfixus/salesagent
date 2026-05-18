@@ -4,13 +4,17 @@
 
 {% block content %}
 <div class="container">
-    <div class="page-header">
-        <h1>📡 Webhook Management</h1>
-        <p class="subtitle">Configure webhooks for <strong>{{ principal.name }}</strong> ({{ principal.principal_id }})</p>
-        <a href="{{ url_for('principals.list_principals', tenant_id=tenant_id) }}" class="btn btn-secondary">
-            ← Back to Buyer Agents
-        </a>
-    </div>
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Webhooks</h2>
+            <p class="sa-page-header__subtitle">Configure webhooks for <strong>{{ principal.name }}</strong> ({{ principal.principal_id }})</p>
+        </div>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('principals.list_principals', tenant_id=tenant_id) }}" class="btn btn-secondary">
+                ← Back to Buyer Agents
+            </a>
+        </div>
+    </header>
 
     <!-- Register New Webhook -->
     <div class="card">

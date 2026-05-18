@@ -3,72 +3,9 @@
 {% block title %}Targeting Criteria Browser - {{ tenant.name }}{% endblock %}
 
 {% block content %}
-<style>
-    /* Ensure tab-content wrapper is always visible */
-    .targeting-browser .tab-content {
-        display: block !important;
-    }
-
-    /* Fix Bootstrap tab visibility - allow proper tab switching */
-    .targeting-browser .tab-pane {
-        display: none;
-    }
-
-    .targeting-browser .tab-pane.active.show {
-        display: block;
-    }
-
-    /* Ensure list items are visible */
-    .targeting-browser .list-group-item {
-        display: block;
-        padding: var(--sa-space-2) var(--sa-space-3);
-        margin-bottom: -1px;
-        background-color: var(--sa-bg-surface);
-        border: 1px solid var(--sa-border);
-        color: var(--sa-text-default);
-        text-decoration: none;
-        width: 100%;
-        min-height: 40px;
-        transition: background-color var(--sa-duration-fast) var(--sa-easing);
-    }
-
-    /* Compact key titles */
-    .targeting-browser .list-group-item h6 {
-        font-size: var(--sa-text-sm);
-        margin-bottom: 0.15rem;
-        font-weight: 600;
-        color: var(--sa-text-strong);
-    }
-
-    /* Compact key subtitles */
-    .targeting-browser .list-group-item small {
-        font-size: var(--sa-text-xs);
-        line-height: 1.2;
-        color: var(--sa-text-muted);
-    }
-
-    /* Compact badge spacing */
-    .targeting-browser .list-group-item .badge {
-        font-size: 0.7rem;
-        padding: 0.2rem 0.4rem;
-    }
-
-    .targeting-browser .list-group-item:hover {
-        background-color: var(--sa-gray-50);
-        cursor: pointer;
-    }
-
-    .targeting-browser .list-group-item.active {
-        background-color: var(--sa-primary);
-        border-color: var(--sa-primary);
-        color: #fff;
-    }
-    .targeting-browser .list-group-item.active h6,
-    .targeting-browser .list-group-item.active small { color: #fff; }
-</style>
-<div class="container-fluid targeting-browser">
+<div class="container targeting-browser">
     <header class="sa-page-header">
-        <h1 class="sa-page-header__title">Targeting Criteria Browser</h1>
+        <h2 class="sa-page-header__title">Targeting Criteria Browser</h2>
         <div class="sa-page-header__actions">
             {% if not embedded_view %}
             <button id="sync-targeting-btn" class="btn btn-primary" onclick="syncTargetingData()">

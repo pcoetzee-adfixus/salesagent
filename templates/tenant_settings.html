@@ -319,10 +319,11 @@
     /* Virtual Host now uses simple text input - complex widget styling removed */
 </style>
 
+<div class="container">
 <!-- Header -->
 <header class="sa-page-header">
     <div>
-        <h1 class="sa-page-header__title">Settings</h1>
+        <h2 class="sa-page-header__title">Settings</h2>
         <p class="sa-page-header__subtitle">Configure {{ tenant.name }}</p>
     </div>
     <div class="sa-page-header__actions">
@@ -1828,6 +1829,7 @@ async function unregisterDomain() {
             </div>
         </div>
     </div>
+</div>
 </div>
 
 {% endblock %}

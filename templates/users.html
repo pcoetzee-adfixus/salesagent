@@ -4,11 +4,6 @@
 
 {% block content %}
 <style>
-    .users-container {
-        max-width: 900px;
-        margin: 0 auto;
-    }
-
     .page-header {
         margin-bottom: 2rem;
     }
@@ -394,11 +389,13 @@
     }
 </style>
 
-<div class="users-container">
-    <div class="page-header">
-        <h1>Users & Access</h1>
-        <p>Configure SSO and manage who can access {{ tenant_name }}</p>
-    </div>
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Users & Access</h2>
+            <p class="sa-page-header__subtitle">Configure SSO and manage who can access {{ tenant_name }}</p>
+        </div>
+    </header>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}

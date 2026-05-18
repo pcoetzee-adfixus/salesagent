@@ -4,11 +4,6 @@
 
 {% block content %}
 <style>
-    .checklist-container {
-        max-width: 1000px;
-        margin: 0 auto;
-    }
-
     .checklist-header {
         text-align: center;
         margin-bottom: 2rem;
@@ -213,7 +208,7 @@
     }
 </style>
 
-<div class="checklist-container">
+<div class="container">
     <!-- Back Button -->
     <div style="margin-bottom: 1rem;">
         <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" style="color: #6b7280; text-decoration: none; font-size: 0.875rem;">
@@ -222,15 +217,19 @@
     </div>
 
     <!-- Header -->
-    <div class="checklist-header">
-        <h1>Setup Checklist</h1>
-        <div class="progress-circle">
-            {{ setup_status.progress_percent }}%
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Setup Checklist</h2>
+            <p class="sa-page-header__subtitle">
+                {{ setup_status.completed_count }} of {{ setup_status.total_count }} tasks complete
+            </p>
         </div>
-        <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.95;">
-            {{ setup_status.completed_count }} of {{ setup_status.total_count }} tasks complete
-        </p>
-    </div>
+        <div class="sa-page-header__actions">
+            <div class="progress-circle">
+                {{ setup_status.progress_percent }}%
+            </div>
+        </div>
+    </header>
 
     <!-- Ready Banner (if all critical complete) -->
     {% if setup_status.ready_for_orders %}

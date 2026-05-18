@@ -16,9 +16,12 @@
     }
 </style>
 
-<div class="dashboard-header">
-    <h1>Media Buy Details</h1>
-</div>
+<div class="container">
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Media Buy Details</h2>
+    </div>
+</header>
 
 <!-- Approval Alert -->
 {% if pending_approval_step %}
@@ -937,4 +940,5 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 </script>
+</div>
 {% endblock %}

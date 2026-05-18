@@ -3,21 +3,26 @@
 {% block title %}Products - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<!-- Product Design Guide -->
-<div class="sa-banner sa-banner--info" style="margin-bottom: var(--sa-space-4);">
-    <div class="sa-banner__icon">📚</div>
-    <div>
-        <div class="sa-banner__title">Product Design Guide</div>
-        <p style="margin: 0 0 var(--sa-space-3) 0;">
-            Learn best practices for designing effective ad products that buyers will love.
-        </p>
-        <a href="https://adcontextprotocol.org/docs/" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
-            View AdCP Documentation →
-        </a>
+<!-- Page Header -->
+<header class="sa-page-header">
+    <h2 class="sa-page-header__title">Products</h2>
+    <div class="sa-page-header__actions">
+        {% if products|length > 0 %}
+        <!-- View Mode Toggle -->
+        <div class="sa-view-toggle">
+            <button id="view-list" class="view-toggle active" onclick="switchView('list')" title="List view">
+                <i class="fas fa-list"></i>
+            </button>
+            <button id="view-card" class="view-toggle" onclick="switchView('card')" title="Card view (buyer preview)">
+                <i class="fas fa-th-large"></i>
+            </button>
+        </div>
+        {% endif %}
+        <a href="{{ url_for('products.add_product', tenant_id=tenant_id) }}" class="btn btn-primary">Add Product</a>
     </div>
-</div>
+</header>
 
-<div class="card">
+<div class="card{% if products|length > 0 %} card-with-banner{% endif %}">
     {% if products|length == 0 %}
     <!-- No products - show welcome message -->
     <div class="empty-state">
@@ -34,21 +39,6 @@
     </div>
     {% else %}
     <!-- Has products - show normal list -->
-    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
-        <h2 class="sa-page-header__title">Products — {{ tenant_name }}</h2>
-        <div class="sa-page-header__actions">
-            <!-- View Mode Toggle -->
-            <div class="sa-view-toggle">
-                <button id="view-list" class="view-toggle active" onclick="switchView('list')" title="List view">
-                    <i class="fas fa-list"></i>
-                </button>
-                <button id="view-card" class="view-toggle" onclick="switchView('card')" title="Card view (buyer preview)">
-                    <i class="fas fa-th-large"></i>
-                </button>
-            </div>
-            <a href="{{ url_for('products.add_product', tenant_id=tenant_id) }}" class="btn btn-primary">Add Product</a>
-        </div>
-    </header>
 
     <!-- Card View (Buyer Preview) -->
     <div id="card-view" style="display: none;">
@@ -279,6 +269,21 @@
     {% endif %} <!-- end else (has products) -->
 </div>
 
+<!-- Product Design Guide - dismissible banner at bottom -->
+<div id="product-doc-banner" class="sa-banner sa-banner--info sa-banner--bottom">
+    <div class="sa-banner__icon">📚</div>
+    <div class="sa-banner__content">
+        <div class="sa-banner__title">Product Design Guide</div>
+        <p>Learn best practices for designing effective ad products that buyers will love.</p>
+        <a href="https://docs.adcontextprotocol.org/docs/media-buy/product-discovery/media-products" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+            View AdCP Product Documentation →
+        </a>
+    </div>
+    <button class="sa-banner__dismiss" onclick="dismissProductDocBanner()" title="Dismiss">
+        <i class="fas fa-times"></i>
+    </button>
+</div>
+
 <style>
 .empty-state {
     text-align: center;
@@ -457,6 +462,57 @@
 @media (max-width: 768px) {
     .product-card-grid { grid-template-columns: 1fr; }
 }
+
+/* Card needs bottom padding so content isn't hidden behind fixed banner */
+.card-with-banner {
+    padding-bottom: 100px;
+}
+
+/* Bottom dismissible banner */
+.sa-banner--bottom {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1040;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sa-space-3);
+    padding: var(--sa-space-4) var(--sa-space-5);
+    background: var(--sa-bg-surface);
+    border-top: 1px solid var(--sa-border-strong);
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.sa-banner--bottom .sa-banner__content {
+    flex: 1;
+    min-width: 0;
+}
+
+.sa-banner--bottom .sa-banner__title {
+    font-weight: 600;
+    margin-bottom: var(--sa-space-1);
+}
+
+.sa-banner--bottom p {
+    margin: 0 0 var(--sa-space-2) 0;
+    font-size: var(--sa-text-sm);
+    color: var(--sa-text-muted);
+}
+
+.sa-banner__dismiss {
+    background: none;
+    border: none;
+    padding: var(--sa-space-1);
+    cursor: pointer;
+    color: var(--sa-text-muted);
+    transition: color var(--sa-duration-fast) var(--sa-easing);
+    flex-shrink: 0;
+}
+
+.sa-banner__dismiss:hover {
+    color: var(--sa-text-strong);
+}
 </style>
 
 <script>
@@ -522,11 +578,21 @@ function switchView(mode) {
     }
 }
 
-// Restore view mode from localStorage on page load
+// Dismiss product doc banner
+function dismissProductDocBanner() {
+    document.getElementById('product-doc-banner').style.display = 'none';
+    localStorage.setItem('productDocBannerDismissed', 'true');
+}
+
+// Restore view mode + banner state from localStorage on page load
 document.addEventListener('DOMContentLoaded', function() {
     const savedView = localStorage.getItem('productsViewMode');
     if (savedView === 'card') {
         switchView('card');
+    }
+    if (localStorage.getItem('productDocBannerDismissed') === 'true') {
+        const banner = document.getElementById('product-doc-banner');
+        if (banner) banner.style.display = 'none';
     }
 });
 </script>

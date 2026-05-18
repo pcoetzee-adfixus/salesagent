@@ -58,11 +58,14 @@
     {%- endif -%}
 {%- endset %}
 
-<div class="pub-section">
-    <h2>Publisher partnerships</h2>
-    <p class="pub-section-help">
-        The publishers who've authorized this sales agent in their <code>adagents.json</code>.
-    </p>
+<header class="sa-page-header">
+    <div>
+        <h2 class="sa-page-header__title">Publishers</h2>
+        <p class="sa-page-header__subtitle">
+            The publishers who've authorized this sales agent in their <code>adagents.json</code>.
+        </p>
+    </div>
+</header>
 
     {% if embedded_view %}
     <div class="pub-banner-info">
