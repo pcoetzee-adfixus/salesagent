@@ -32,6 +32,7 @@ from src.admin.api_schemas.tenant_management import (
     StatusWorkflowsBlock,
     TenantStatusResponse,
 )
+from src.admin.utils.embedded_capabilities import publisher_owns
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -212,11 +213,7 @@ def _media_buys_block(session: Session, tenant_id: str) -> StatusMediaBuysBlock:
 
 
 def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
-    """Package counters joined to the parent media buy for tenant scoping.
-
-    ``last_24h_impressions`` is 0 until delivery aggregation is wired in
-    (sprint-1.5 known gap — see design Open Q #3).
-    """
+    """Package counters joined to the parent media buy for tenant scoping."""
     active = session.scalar(
         select(func.count())
         .select_from(MediaPackage)
@@ -232,7 +229,6 @@ def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
     return StatusPackagesBlock(
         active_count=int(active or 0),
         paused_count=int(paused or 0),
-        last_24h_impressions=0,
     )
 
 
@@ -308,9 +304,30 @@ def _webhooks_block() -> StatusWebhooksBlock | None:
 #   sso_configuration → hidden on managed (multi-tenant runtime already gates it
 #     out), publisher on open-instance
 #   authorized_properties (legacy) → hidden everywhere (deprecated)
-#   everything else → publisher
+#   everything else → publisher, unless EMBEDDED_CAPABILITIES has handed the
+#     underlying workflow to the storefront (see _TASK_CAPABILITY below)
 _PLATFORM_KEYS_WHEN_MANAGED = frozenset(("public_agent_url",))
 _HIDDEN_KEYS = frozenset(("authorized_properties",))
+
+# Setup-task keys whose completion is gated on a storefront-ownable capability.
+# When the storefront owns the capability (EMBEDDED_CAPABILITIES[<cap>] ==
+# "storefront"), the publisher can't fix it — the corresponding UI section is
+# hidden by the {% if publisher_owns(...) %} gate, so surfacing the item with
+# a publisher scope produces an action the seller can't act on. Treating it as
+# platform scope routes it the same way as public_agent_url: visible to hosts
+# via the Tenant Management API, suppressed in the publisher-facing /status.
+#
+# Mirror this map when adding a new setup task in SetupChecklistService whose
+# admin UI is gated by `publisher_owns(<cap>)` in a template. Without an entry
+# here the task surfaces to embedded sellers as a publisher action they can't
+# act on. Capability strings must match the values used in the Jinja gates and
+# in EMBEDDED_CAPABILITIES — see src/admin/utils/embedded_capabilities.py.
+_TASK_CAPABILITY: dict[str, str] = {
+    "slack_integration": "slack",
+    "gemini_api_key": "ai_services",
+    "creative_approval_guidelines": "creative_approval",
+    "signals_agent": "signals_agents",
+}
 
 
 # Configure paths are relative to the tenant root so Storefront can compose
@@ -336,6 +353,8 @@ def _scope_for_task(key: str, *, is_managed: bool) -> str | None:
         return None
     if key in _PLATFORM_KEYS_WHEN_MANAGED:
         return "platform" if is_managed else "publisher"
+    if is_managed and key in _TASK_CAPABILITY and not publisher_owns(_TASK_CAPABILITY[key]):
+        return "platform"
     return "publisher"
 
 

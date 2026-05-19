@@ -792,6 +792,13 @@
 {% include 'components/setup_checklist_widget.html' %}
 {% endif %}
 
+<!-- Dashboard jobs (#471): three ongoing operator surfaces — discovery,
+     composition, delivery. Always visible; these are persistent jobs,
+     not a setup sequence. -->
+{% if dashboard_jobs %}
+{% include 'components/dashboard_jobs_widget.html' %}
+{% endif %}
+
 <!-- Three-stage business framing: Incoming · Running · Pipeline -->
 {% set inc = ledger.incoming %}
 {% set run = ledger.running %}

@@ -107,7 +107,17 @@ logger = logging.getLogger(__name__)
 # Create Blueprint
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
 
-# OpenAPI spec — Swagger UI at /api/v1/tenant-management/docs, spec at /api/v1/tenant-management/openapi.json
+# OpenAPI spec is served by spectree under the blueprint's `path="docs"`:
+#   spec:       {blueprint_prefix}/docs/openapi.json
+#   Swagger UI: {blueprint_prefix}/docs/swagger
+#   Redoc:      {blueprint_prefix}/docs/redoc
+# In production the admin app is WSGI-mounted under /admin/, so the public URLs are
+# /admin/api/v1/tenant-management/docs/{openapi.json,swagger,redoc}.
+#
+# The spec endpoint is intentionally unauthenticated — it describes shapes,
+# not data. Every endpoint below is gated by ``require_tenant_management_api_key``
+# (``X-Tenant-Management-API-Key`` header). If you ever mount additional routes
+# on this blueprint without that decorator, revisit this assumption.
 spec = SpecTree(
     "flask",
     title="Sales Agent — Tenant Management API",
@@ -140,16 +150,18 @@ def _adapter_probe_error(adapter_type: str, probe: ProbeResult):
 
     Translates the typed sub-code from :class:`ProbeResult` into the
     ``adapter_{code}`` family of API error codes. Forwards the structured
-    ``details`` block (e.g. ``gam_fault``) so downstream consumers can
-    branch on machine-readable fields rather than parsing the human
-    message. See :mod:`src.admin.services.adapter_connection_tester` for
-    the classification.
+    ``details`` block (``vendor_fault``) and the ``remediation`` hint so
+    downstream consumers can branch on machine-readable fields rather than
+    parsing the human message. See :mod:`src.admin.services.adapter_connection_tester`
+    for the classification.
     """
     code = probe.error_code or "connection_failed"
     details: dict[str, Any] = {
         "adapter_type": adapter_type,
         "error": probe.error_message,
     }
+    if probe.remediation:
+        details["remediation"] = probe.remediation
     if probe.details:
         details.update(probe.details)
     return _api_error(
@@ -1243,6 +1255,7 @@ def preview_adapter_endpoint():
         inventory_reachable=preview.inventory_reachable,
         error=preview.error,
         error_code=preview.error_code,
+        remediation=preview.remediation,
         details=preview.details or None,
     )
     return jsonify(response.model_dump(mode="json"))
@@ -1456,6 +1469,7 @@ def adapter_test_connection(tenant_id: str):
                 success=probe.success,
                 error=probe.error_message,
                 error_code=probe.error_code,
+                remediation=probe.remediation,
                 details=probe.details or None,
                 tested_at=datetime.now(UTC),
             ).model_dump(mode="json")

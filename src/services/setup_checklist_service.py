@@ -18,11 +18,13 @@ from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
+    InventoryProfile,
     Principal,
     Product,
     PublisherPartner,
     Tenant,
     TenantAuthConfig,
+    TenantSignal,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,42 @@ def _is_multi_tenant_mode() -> bool:
 # Simple time-based cache for setup status (5 minute TTL)
 _setup_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+# Adapter slugs that have inventory_review_state coverage data today (#485).
+# FreeWheel and SpringServe land when their sync surfaces participate.
+_INVENTORY_COVERAGE_TRACKED_ADAPTERS: frozenset[str] = frozenset({"google_ad_manager", "gam"})
+
+
+def _build_inventory_coverage(repo: Any, tenant_ad_server: str | None) -> dict[str, Any] | None:
+    """Coverage payload for the Discovery card's bundles sub-item (#485).
+
+    Returns ``None`` for tenants on adapters we don't track yet — the widget
+    falls back to a placeholder hint. For tracked adapters, returns counts
+    for ad units and placements split out by review status:
+
+    * ``total`` — synced from the adapter (denominator)
+    * ``in_bundle`` — referenced by ≥1 InventoryProfile
+    * ``explicitly_skipped`` — operator decided not to sell
+    * ``pending`` — synced, not bundled, not skipped (the actionable bucket)
+
+    The ``all_reviewed`` flag is True when ``pending == 0`` — the end-state
+    of Job 1: every synced entity has either been bundled or skipped.
+    """
+    if tenant_ad_server not in _INVENTORY_COVERAGE_TRACKED_ADAPTERS:
+        return None
+    adapter_slug = "gam"
+    ad_units = repo.coverage_summary(adapter=adapter_slug, entity_type="ad_unit")
+    placements = repo.coverage_summary(adapter=adapter_slug, entity_type="placement")
+    all_reviewed = ad_units["pending"] == 0 and placements["pending"] == 0
+    total = ad_units["total"] + placements["total"]
+    return {
+        "adapter": adapter_slug,
+        "ad_units": ad_units,
+        "placements": placements,
+        "all_reviewed": all_reviewed,
+        "has_synced_inventory": total > 0,
+    }
 
 
 class SetupTask:
@@ -468,6 +506,31 @@ class SetupChecklistService:
             ),
         ]
 
+    @staticmethod
+    def _evaluate_ad_server(tenant: Tenant) -> tuple[bool, str]:
+        """Compute ``(is_configured, config_details)`` for the tenant's ad server.
+
+        Shared by ``_check_critical_tasks``, ``_build_critical_tasks``, and
+        ``get_capability_ladder``. Mock adapter only counts as configured when
+        ``ADCP_TESTING=true`` — otherwise it's treated as not production-ready.
+        """
+        if not (tenant.ad_server and tenant.ad_server != ""):
+            return False, "No ad server configured"
+
+        if tenant.is_gam_tenant:
+            return True, "GAM configured - Test connection to verify"
+
+        if tenant.ad_server == "mock":
+            if os.environ.get("ADCP_TESTING") == "true":
+                return True, "Mock adapter configured (test mode)"
+            return False, "Mock adapter - Configure a real ad server for production"
+
+        if tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
+            return True, f"{tenant.ad_server} adapter configured"
+
+        # Unknown adapter type - show warning but don't block
+        return True, f"{tenant.ad_server} adapter - verify configuration"
+
     def _check_critical_tasks(self, session, tenant: Tenant) -> list[SetupTask]:
         """Check critical tasks required before first order."""
         tasks = []
@@ -479,43 +542,7 @@ class SetupChecklistService:
 
         # 1. Ad Server FULLY CONFIGURED - CRITICAL BLOCKER
         # This is the most important task - nothing else can be done until ad server works
-        ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
-
-        # For GAM, check that it's fully configured with OAuth credentials
-        ad_server_fully_configured = False
-        config_details = "No ad server configured"
-
-        if ad_server_selected:
-            if tenant.is_gam_tenant:
-                # Check if GAM has OAuth tokens (indicates successful authentication)
-                # GAM config is stored in the adapter_config table, not directly on tenant
-                # For now, just check if adapter is selected
-                has_credentials = True  # Assume configured if GAM is selected
-                ad_server_fully_configured = has_credentials
-
-                if has_credentials:
-                    config_details = "GAM configured - Test connection to verify"
-                else:
-                    config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
-            elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
-            elif tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
-                # Schema-driven adapters — configured once credentials are saved.
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter configured"
-            else:
-                # Unknown adapter type - show warning but don't block
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter - verify configuration"
+        ad_server_fully_configured, config_details = self._evaluate_ad_server(tenant)
 
         tasks.append(
             SetupTask(
@@ -940,31 +967,7 @@ class SetupChecklistService:
         tasks = list(self._build_aao_tasks(tenant))
 
         # 1. Ad Server Configuration
-        ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
-        ad_server_fully_configured = False
-        config_details = "No ad server configured"
-
-        if ad_server_selected:
-            if tenant.is_gam_tenant:
-                ad_server_fully_configured = True
-                config_details = "GAM configured - Test connection to verify"
-            elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
-            elif tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter configured"
-            else:
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter - verify configuration"
+        ad_server_fully_configured, config_details = self._evaluate_ad_server(tenant)
 
         tasks.append(
             SetupTask(
@@ -1315,6 +1318,145 @@ class SetupChecklistService:
         )
 
         return tasks
+
+    def get_dashboard_jobs(self) -> dict[str, Any]:
+        """Compute the three ongoing seller jobs for the dashboard (#471).
+
+        The operator's dashboard isn't a setup wizard with an "ready" state —
+        it's a workbench for three persistent jobs:
+
+        * **Discovery & Matching** — *the* primary job; the reason the
+          operator opens the dashboard. "Have I exposed the right
+          inventory and signals so buyers can find them?" Today the widget
+          surfaces bundle + signal counts; the richer coverage analytics
+          (what fraction of ad units / placements / KVs / audiences are
+          exposed vs. reviewed-and-explicitly-skipped) land in follow-up
+          issues. Adapter-agnostic in principle (GAM today; FreeWheel,
+          SpringServe, etc. as their syncs land).
+
+        * **Composition** — combine catalog into buyer-facing products.
+          Static product CRUD today; dynamic composition (price ×
+          optimization × targeting × demand) is the direction. Hidden for
+          embedded tenants: composition runs upstream in the storefront.
+
+        * **Delivery** — fulfill the orders you've sold. Approvals,
+          pacing, exceptions. Light here — the existing Pipeline strip
+          below this widget shows the live state. This card is the
+          jumping-off point.
+
+        These are **ongoing jobs**, not a sequence to complete; the widget
+        is always shown. Distinct from the hygiene gate
+        (:meth:`validate_setup_complete`) — that gates whether the agent
+        can take orders at all; these are the operator's day-to-day work.
+        """
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        with get_db_session() as session:
+            tenant = TenantConfigRepository(session, self.tenant_id).get_tenant()
+            if not tenant:
+                raise ValueError(f"Tenant {self.tenant_id} not found")
+
+            inventory_bundle_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(InventoryProfile)
+                    .where(InventoryProfile.tenant_id == self.tenant_id)
+                )
+                or 0
+            )
+            signal_profile_count = (
+                session.scalar(
+                    select(func.count()).select_from(TenantSignal).where(TenantSignal.tenant_id == self.tenant_id)
+                )
+                or 0
+            )
+            product_count = (
+                session.scalar(select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id))
+                or 0
+            )
+
+            # Inventory coverage analytics (#485). Only computed for tenants
+            # on an adapter we track (GAM today). Embedded tenants don't see
+            # publisher-side inventory coverage — their storefront drives the
+            # narrative — but they can still expose bundles, so the count
+            # remains accurate.
+            from src.core.database.repositories.inventory_review_state import (
+                InventoryReviewStateRepository,
+            )
+
+            inventory_coverage = _build_inventory_coverage(
+                InventoryReviewStateRepository(session, self.tenant_id),
+                tenant_ad_server=tenant.ad_server,
+            )
+
+            discovery_job: dict[str, Any] = {
+                "key": "discovery",
+                "name": "Product discovery & matching",
+                "tagline": "Make sure buyers can find the right inventory and signals from you.",
+                "sub_items": [
+                    {
+                        "key": "bundles",
+                        "name": "Inventory bundles",
+                        "count": inventory_bundle_count,
+                        "started": inventory_bundle_count > 0,
+                        "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
+                        "action_label": "Review bundles" if inventory_bundle_count > 0 else "Author bundles",
+                        # Real inventory coverage analytics (#485). ``None`` for adapters we
+                        # don't track yet — the widget falls back to a placeholder hint.
+                        "coverage": inventory_coverage,
+                    },
+                    {
+                        "key": "signals",
+                        "name": "Signal profiles",
+                        "count": signal_profile_count,
+                        # Signals are optional — a publisher with zero signals is valid, but only
+                        # if they've reviewed their signal universe and made the call. Signal
+                        # coverage analytics land in #486 (parallel work).
+                        "started": signal_profile_count > 0,
+                        "action_url": self._route_url("tenant_signals.list_signals"),
+                        "action_label": "Review signals" if signal_profile_count > 0 else "Author signals",
+                        "coverage": None,
+                    },
+                ],
+            }
+
+            # Composition job — hidden entirely for embedded. The storefront
+            # owns composition; surfacing it on a publisher dashboard would
+            # mislead.
+            composition_job: dict[str, Any] | None = None
+            if not tenant.is_embedded:
+                composition_job = {
+                    "key": "composition",
+                    "name": "Composition",
+                    "tagline": "Combine your catalog into buyer-facing products.",
+                    "count": product_count,
+                    "count_label": "product" if product_count == 1 else "products",
+                    "action_url": self._route_url("products.list_products"),
+                    "action_label": "Manage products" if product_count > 0 else "Compose a product",
+                    # Static CRUD is the present-tense path; dynamic composition is the direction.
+                    "note": "Static products today. Dynamic composition (pricing × targeting × demand) is the direction.",
+                }
+
+            # Delivery job — light surface. The detailed pipeline (incoming /
+            # running / pending) is the existing strip below this widget.
+            delivery_job: dict[str, Any] = {
+                "key": "delivery",
+                "name": "Delivery",
+                "tagline": "Fulfill the orders you've sold.",
+                "action_url": self._route_url("operations.reporting"),
+                "action_label": "Reporting",
+                "note": "Approvals, pacing, and exceptions live in the pipeline below.",
+            }
+
+            jobs: list[dict[str, Any]] = [discovery_job]
+            if composition_job is not None:
+                jobs.append(composition_job)
+            jobs.append(delivery_job)
+
+            return {
+                "is_embedded": tenant.is_embedded,
+                "jobs": jobs,
+            }
 
     def get_next_steps(self) -> list[dict[str, str]]:
         """Get prioritized next steps for incomplete tasks.

@@ -8,9 +8,11 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import publisher_owns
 from src.admin.utils.embedded_mode_auth import is_embedded_view
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
+from src.core.database.repositories.gam_sync import GAMSyncRepository
 
 logger = logging.getLogger(__name__)
 
@@ -173,24 +175,100 @@ def get_targeting_data(tenant_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _upsert_targeting_value_row(
+    repo: GAMSyncRepository,
+    *,
+    key_id: str,
+    key_name: str,
+    key_display_name: str,
+    value,
+    sync_time,
+) -> None:
+    """Upsert a ``custom_targeting_value`` row from a GAM discovery object.
+
+    Mirrors the shape that ``gam_inventory_service.py`` already writes when
+    its own value endpoint is hit — same metadata fields so cache reads are
+    uniform regardless of which path wrote the row.
+    """
+    from src.core.database.models import GAMInventory
+
+    metadata = {
+        "custom_targeting_key_id": str(key_id),
+        "display_name": value.display_name or value.name,
+        "match_type": value.match_type or "EXACT",
+        "key_name": key_name,
+        "key_display_name": key_display_name,
+    }
+    existing = repo.find_inventory_item("custom_targeting_value", value.id)
+    if existing:
+        existing.name = value.name
+        existing.path = [key_display_name, value.display_name or value.name]
+        existing.status = value.status or "ACTIVE"
+        existing.inventory_metadata = metadata
+        existing.last_synced = sync_time
+    else:
+        repo.add(
+            GAMInventory(
+                tenant_id=repo.tenant_id,
+                inventory_type="custom_targeting_value",
+                inventory_id=value.id,
+                name=value.name,
+                path=[key_display_name, value.display_name or value.name],
+                status=value.status or "ACTIVE",
+                inventory_metadata=metadata,
+                last_synced=sync_time,
+            )
+        )
+
+
+def _cached_targeting_values(repo: GAMSyncRepository, key_id: str, key_name: str) -> list[dict] | None:
+    """Return cached custom_targeting_value rows for ``key_id``, or None on miss.
+
+    Rows are persisted by either the bulk sync (when ``fetch_values=True``)
+    or the live-fetch path below on first call. We key by
+    ``inventory_metadata.custom_targeting_key_id`` so the cache is
+    re-readable without joining to the key row.
+    """
+    rows = repo.list_values_for_key(key_id)
+    if not rows:
+        return None
+    values = []
+    for row in rows:
+        md = row.inventory_metadata or {}
+        values.append(
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "display_name": md.get("display_name") or row.name,
+                "match_type": md.get("match_type") or "EXACT",
+                "status": row.status or "ACTIVE",
+                "key_id": key_id,
+                "key_name": key_name,
+            }
+        )
+    return values
+
+
 @inventory_bp.route("/api/tenant/<tenant_id>/targeting/values/<key_id>", methods=["GET"])
 @require_tenant_access(api_mode=True)
 def get_targeting_values(tenant_id, key_id):
-    """Get custom targeting values for a specific key by querying GAM in real-time.
+    """Get custom targeting values for a key.
 
-    Since inventory sync doesn't fetch values by default (for performance),
-    this endpoint queries GAM directly to get fresh values on-demand.
+    Reads from cached ``GAMInventory`` rows (``inventory_type=
+    'custom_targeting_value'``) when available; falls back to a live GAM
+    fetch on cache miss and persists the result for next time. Set
+    ``?refresh=1`` to force a live re-sync.
 
     Args:
         tenant_id: Tenant identifier
         key_id: Custom targeting key ID
 
     Returns:
-        JSON array of custom targeting values with their metadata
+        JSON ``{values: [...], count, source: "cache"|"live"}``
     """
     try:
         with get_db_session() as db_session:
-            from src.core.database.models import GAMInventory, Tenant
+            from src.core.database.models import Tenant
 
             # Get tenant and verify it has GAM configured
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -198,15 +276,19 @@ def get_targeting_values(tenant_id, key_id):
                 return jsonify({"error": "Tenant not found"}), 404
 
             # Verify key exists in our database
-            key_stmt = select(GAMInventory).where(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "custom_targeting_key",
-                GAMInventory.inventory_id == key_id,
-            )
-            key_row = db_session.scalars(key_stmt).first()
+            gam_sync_repo = GAMSyncRepository(db_session, tenant_id)
+            key_row = gam_sync_repo.find_inventory_item("custom_targeting_key", key_id)
 
             if not key_row:
                 return jsonify({"error": "Custom targeting key not found"}), 404
+
+            # Cache-first: skip live fetch when we have rows for this key,
+            # unless the caller asked to refresh.
+            refresh = request.args.get("refresh") in ("1", "true", "yes")
+            if not refresh:
+                cached = _cached_targeting_values(gam_sync_repo, key_id, key_row.name)
+                if cached is not None:
+                    return jsonify({"values": cached, "count": len(cached), "source": "cache"})
 
             # Query GAM in real-time for values
             adapter_config = tenant.adapter_config
@@ -309,7 +391,24 @@ def get_targeting_values(tenant_id, key_id):
                     }
                 )
 
-            return jsonify({"values": values, "count": len(values)})
+            # Persist values so subsequent calls hit cache and tenants without
+            # live GAM (demo, dev) can still browse the values they've fetched.
+            from datetime import UTC, datetime
+
+            key_display_name = (key_row.inventory_metadata or {}).get("display_name") or key_row.name
+            sync_time = datetime.now(UTC)
+            for gam_value in gam_values:
+                _upsert_targeting_value_row(
+                    gam_sync_repo,
+                    key_id=key_id,
+                    key_name=key_row.name,
+                    key_display_name=key_display_name,
+                    value=gam_value,
+                    sync_time=sync_time,
+                )
+            db_session.commit()
+
+            return jsonify({"values": values, "count": len(values), "source": "live"})
 
     except Exception as e:
         logger.error(f"Error fetching targeting values for key {key_id}: {e}", exc_info=True)
@@ -321,11 +420,19 @@ def get_targeting_values(tenant_id, key_id):
 def inventory_browser(tenant_id):
     """Display the Sync Inventory page (sync controls + sync state only).
 
-    On embedded tenants the page is replaced with the platform-managed
-    lock banner — sync is driven by the upstream platform via
-    ``POST /api/v1/tenant-management/tenants/{id}/refresh``. Returns 200
-    (not 404) so deep-links land on a "managed by your platform"
-    explanation rather than a dead end.
+    Gated by the ``inventory_sync`` capability flag. When the storefront
+    owns it (the historical embedded default), sync is driven by the
+    upstream platform via ``POST /api/v1/tenant-management/tenants/{id}/refresh``
+    and this page redirects to Browse Inventory. When the publisher owns
+    it, the page renders normally on both open and embedded tenants.
+
+    Why ``publisher_owns`` here but ``is_embedded_view`` in
+    ``targeting_browser`` / ``_load_tenant_for_inventory``: sync is a
+    per-instance contract between the salesagent and the storefront
+    (who pushes the button), so it follows the env flag. Browse and
+    targeting are per-tenant read surfaces that adapt their UI to the
+    *current request's* embedded context (preview mode, header auth),
+    so they follow ``is_embedded_view``.
 
     Browse Inventory, Targeting Criteria, and Inventory Profiles are
     now top-level nav siblings — see ``inventory_browse``,
@@ -337,13 +444,11 @@ def inventory_browser(tenant_id):
         if not tenant:
             return "Tenant not found", 404
 
-        if is_embedded_view(tenant):
-            # Embedded views don't get the per-tenant Sync Inventory page —
-            # the host drives sync via POST /tenants/<id>/refresh. Redirect
-            # the deep-link to Browse Inventory (the read-only inventory
-            # surface that embedded publishers DO use). Also fires for
-            # preview requests on a non-embedded tenant authenticated via
-            # headers.
+        if not publisher_owns("inventory_sync"):
+            # Storefront owns sync — the host drives it via
+            # POST /tenants/<id>/refresh. Redirect the deep-link to
+            # Browse Inventory (the read-only surface embedded publishers
+            # still use).
             return redirect(url_for("inventory.inventory_browse", tenant_id=tenant.tenant_id))
 
         adapter_type = tenant.ad_server or "mock"

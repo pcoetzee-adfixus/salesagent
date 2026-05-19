@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator, model_validator
 
-from src.admin.services.adapter_connection_tester import AdapterErrorCode
+from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
 
 _EXTRA_MODE = get_pydantic_extra_mode()
@@ -484,6 +484,10 @@ class TestConnectionResponse(BaseModel):
     The same code appears as the suffix of the ``adapter_{code}`` error
     in :class:`ApiError` envelopes from the provision / PUT paths. See
     :mod:`src.admin.services.adapter_connection_tester`.
+
+    ``remediation`` (when populated) tells the UI WHO can fix the problem
+    — useful for ``permission_denied`` (vendor enables a role vs customer
+    rebinds the account) where the error code alone isn't actionable.
     """
 
     model_config = _config()
@@ -491,6 +495,7 @@ class TestConnectionResponse(BaseModel):
     success: bool
     error: str | None = None
     error_code: AdapterErrorCode | None = None
+    remediation: RemediationHint | None = None
     details: dict[str, Any] | None = None
     tested_at: datetime
 
@@ -530,6 +535,7 @@ class PreviewAdapterResponse(BaseModel):
     inventory_reachable: bool = False
     error: str | None = None
     error_code: AdapterErrorCode | None = None
+    remediation: RemediationHint | None = None
     details: dict[str, Any] | None = None
 
 
@@ -593,17 +599,12 @@ class StatusMediaBuysBlock(BaseModel):
 
 
 class StatusPackagesBlock(BaseModel):
-    """Package-level counters (line items inside media buys).
-
-    ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
-    up — see :mod:`docs/design/embedded-mode-sprint-1.5.md` Open Q #3.
-    """
+    """Package-level counters (line items inside media buys)."""
 
     model_config = _config()
 
     active_count: int = 0
     paused_count: int = 0
-    last_24h_impressions: int = 0
 
 
 class StatusCreativesBlock(BaseModel):

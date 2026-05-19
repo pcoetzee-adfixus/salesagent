@@ -193,8 +193,7 @@ class Tenant(Base, JSONValidatorMixin):
     # our outbound signatures can fetch our operator-side keys.
     # See docs/design/signing-non-embedded.md.
     brand_json_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    # Sprint 1.8 buyer-advertiser routing — see
-    # docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md.
+    # Buyer-advertiser routing.
     # Required-before-activation fallback advertiser. Buys whose
     # (operator_domain, brand_house, brand_id) triple doesn't match a
     # routing rule fall through to this advertiser; if NULL, the routing
@@ -1291,8 +1290,8 @@ SuperadminConfig = TenantManagementConfig
 class WebhookSubscription(Base):
     """Outbound webhook subscription owned by a tenant.
 
-    Sprint 6 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-6.md)
-    publishes tenant lifecycle events (workflow.created, workflow.decided,
+    [embedded-mode](../../../../docs/design/embedded-mode.md) publishes
+    tenant lifecycle events (workflow.created, workflow.decided,
     media_buy.status_changed, sync.completed, sync.failed,
     tenant.config_changed) to URLs registered here.
 
@@ -1651,6 +1650,76 @@ class InventoryProfile(Base, JSONValidatorMixin):
     )
 
 
+class InventoryReviewState(Base):
+    """Operator review state for each synced inventory entity.
+
+    Backs the Job 1 (Discovery) coverage analytics on the dashboard
+    (#485). The dashboard answers "of all my synced ad units and
+    placements, how many are exposed to buyers via a bundle, how many
+    have I explicitly decided not to sell, how many are still unreviewed?"
+
+    The ``status`` state machine:
+
+    * ``pending`` — synced from the adapter, not yet decided. Default.
+    * ``in_bundle`` — referenced by ≥1 ``InventoryProfile``. Maintained
+      at bundle-save time by the inventory_profiles blueprint.
+    * ``explicitly_skipped`` — operator decided this entity isn't for
+      sale. Cleared if the operator later adds it to a bundle.
+
+    Keyed by ``(tenant_id, adapter, entity_type, external_id)``. The
+    ``entity_type`` slot leaves room for #486 to reuse the same table
+    with ``entity_type='signal_candidate'`` rather than duplicate the
+    schema for signals.
+    """
+
+    __tablename__ = "inventory_review_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # ``gam`` | ``freewheel`` | ``springserve`` — adapter that owns the entity.
+    adapter: Mapped[str] = mapped_column(String(50), nullable=False)
+    # ``ad_unit`` | ``placement`` today. ``signal_candidate`` reserved for #486.
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Adapter-native id. Strings — adapters vary (some are int-like, some not).
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    # ``pending`` | ``in_bundle`` | ``explicitly_skipped``.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "adapter",
+            "entity_type",
+            "external_id",
+            name="uq_inventory_review_state",
+        ),
+        Index(
+            "idx_inventory_review_state_tenant_type_status",
+            "tenant_id",
+            "entity_type",
+            "status",
+        ),
+        Index(
+            "idx_inventory_review_state_tenant_adapter_type",
+            "tenant_id",
+            "adapter",
+            "entity_type",
+        ),
+    )
+
+
 class TenantSignal(Base, JSONValidatorMixin):
     """Operator-authored map of one adapter targeting capability.
 
@@ -1697,6 +1766,11 @@ class TenantSignal(Base, JSONValidatorMixin):
 
     # Categorical taxonomy. Empty list for non-categorical signals.
     categories: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+
+    # AdCP ``Signal.tags`` — lowercase string labels for grouping / filtering
+    # within the catalog. Pattern enforced at the API boundary, not in the
+    # column itself (Postgres can't cheaply validate per-element).
+    tags: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
 
     # Numeric bounds (when value_type='numeric'). NULL when N/A.
     range_min: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
@@ -2235,8 +2309,6 @@ class AdvertiserRoutingRule(Base):
     when a buy comes in carrying inline ``account: AccountReference``
     (operator + brand + sandbox triple). Precedence: exact → house
     wildcard → operator wildcard → tenant default → reject.
-
-    See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
     """
 
     __tablename__ = "advertiser_routing_rules"
@@ -2307,9 +2379,6 @@ class GamAdvertiser(Base):
     routing rules might reference them. The picker hides inactive rows
     by default; the routing-rule editor surfaces a warning if a rule
     points at an inactive advertiser.
-
-    See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``
-    "Piece D: GAM advertisers cache".
     """
 
     __tablename__ = "gam_advertisers"
