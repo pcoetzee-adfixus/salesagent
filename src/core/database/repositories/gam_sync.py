@@ -10,7 +10,7 @@ Core invariant: every query includes ``tenant_id`` in the WHERE clause.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import GamAdvertiser, GAMInventory, GAMLineItem, GAMOrder
@@ -87,6 +87,54 @@ class GAMSyncRepository:
     # ------------------------------------------------------------------
     # GAMInventory readers — fuel the signals bulk-map UI
     # ------------------------------------------------------------------
+
+    def count_inventory(self, inventory_type: str) -> int:
+        """Number of synced GAM inventory rows of one type for the tenant.
+
+        Used by the dashboard's Job 1 coverage hint (#485) as the
+        denominator: "N of M ad units in a bundle."
+        """
+        return (
+            self._session.scalar(
+                select(func.count())
+                .select_from(GAMInventory)
+                .where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == inventory_type,
+                )
+            )
+            or 0
+        )
+
+    def list_inventory_not_in_set(
+        self,
+        inventory_types: tuple[str, ...],
+        bundled_ids_by_type: dict[str, set[str]],
+        limit: int,
+    ) -> list[GAMInventory]:
+        """Return GAMInventory rows whose ``(inventory_type, inventory_id)``
+        is not in the corresponding ``bundled_ids_by_type[inventory_type]``.
+
+        Used by the inventory-bundles list page's "What's not bundled" rail
+        (#485 follow-up): the caller computes which entities are currently
+        referenced by some ``InventoryProfile`` (via the
+        ``InventoryBundleReference`` denormalization) and passes the set in.
+
+        Ordered by ``inventory_type`` then ``name`` so placements surface
+        first (they cascade — bundling a placement covers its children).
+        """
+        if not inventory_types:
+            return []
+        stmt = select(GAMInventory).where(
+            GAMInventory.tenant_id == self._tenant_id,
+            GAMInventory.inventory_type.in_(inventory_types),
+        )
+        for inv_type, ids in bundled_ids_by_type.items():
+            if not ids:
+                continue
+            stmt = stmt.where(~((GAMInventory.inventory_type == inv_type) & (GAMInventory.inventory_id.in_(ids))))
+        stmt = stmt.order_by(GAMInventory.inventory_type, GAMInventory.name).limit(limit)
+        return list(self._session.scalars(stmt).all())
 
     def list_inventory(self, inventory_type: str) -> list[GAMInventory]:
         """Return synced GAM inventory rows of one type

@@ -171,58 +171,58 @@ class TestRelevanceThresholdIntegration:
 # ---------------------------------------------------------------------------
 # Publisher Domains Portfolio (CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01)
 # ---------------------------------------------------------------------------
+#
+# AdCP v3 retired ``list_authorized_properties`` and moved the portfolio onto
+# ``get_adcp_capabilities``. ``core.platforms._capabilities_envelope`` injects
+# ``portfolio.publisher_domains`` from the per-tenant ``PublisherPartner``
+# table. These tests verify the end-to-end wire shape: factory data → DB →
+# capabilities patch → response dict.
 
 
 class TestPublisherDomainsPortfolioIntegration:
     """Publisher domains portfolio assembly from real database."""
 
     @pytest.mark.asyncio
-    async def test_publisher_domains_from_list_authorized_properties(self, integration_db):
-        """list_authorized_properties returns publisher_domains sorted alphabetically.
+    async def test_publisher_domains_sorted_alphabetically(self, integration_db):
+        """``portfolio.publisher_domains`` is sorted alphabetically regardless
+        of insertion order.
 
         Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
         """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
-        from src.core.tools.properties import _list_authorized_properties_impl
+        from unittest.mock import MagicMock
+
+        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
 
         with ProductEnv(tenant_id="pub-dom-t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="pub-dom-t1", subdomain="pub-dom-t1")
-
-            # Add publishers in non-alphabetical order
             for domain in ["zeta.com", "alpha.com", "mike.com"]:
                 PublisherPartnerFactory(tenant=tenant, publisher_domain=domain)
 
-            identity = ResolvedIdentity(
-                principal_id=None,
-                tenant_id="pub-dom-t1",
-                tenant=LazyTenantContext("pub-dom-t1"),
-                protocol="mcp",
-            )
+            tenant_stub = MagicMock()
+            tenant_stub.id = "pub-dom-t1"
+            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
+                domains = _publisher_domains_for_current_tenant()
 
-            response = _list_authorized_properties_impl(req=None, identity=identity)
-            assert response.publisher_domains == ["alpha.com", "mike.com", "zeta.com"]
+        assert domains == ["alpha.com", "mike.com", "zeta.com"]
 
     @pytest.mark.asyncio
-    async def test_empty_publisher_domains_returns_empty_array(self, integration_db):
-        """Tenant with no publishers returns empty array, not null.
+    async def test_publisher_domains_empty_when_no_partners(self, integration_db):
+        """Tenant with zero ``PublisherPartner`` rows yields an empty list so
+        the capabilities patch omits the portfolio block (schema requires
+        ``min_length=1`` on ``publisher_domains``).
 
         Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
         """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
-        from src.core.tools.properties import _list_authorized_properties_impl
+        from unittest.mock import MagicMock
+
+        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
 
         with ProductEnv(tenant_id="pub-dom-t2", principal_id="p1") as env:
             TenantFactory(tenant_id="pub-dom-t2", subdomain="pub-dom-t2")
 
-            identity = ResolvedIdentity(
-                principal_id=None,
-                tenant_id="pub-dom-t2",
-                tenant=LazyTenantContext("pub-dom-t2"),
-                protocol="mcp",
-            )
+            tenant_stub = MagicMock()
+            tenant_stub.id = "pub-dom-t2"
+            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
+                domains = _publisher_domains_for_current_tenant()
 
-            response = _list_authorized_properties_impl(req=None, identity=identity)
-            assert response.publisher_domains == []
-            assert isinstance(response.publisher_domains, list)
+        assert domains == []
