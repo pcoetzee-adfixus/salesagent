@@ -1,6 +1,24 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
+
+# ── supercronic build stage ───────────────────────────────────────────
+# We build from source on Go 1.26.3 rather than pulling the upstream
+# release binary because upstream v0.2.45 is still compiled against
+# Go 1.26.2, which carries 5 stdlib HIGH CVEs (DNS, HTTP/2, mail, Dial):
+#   CVE-2026-3388, CVE-2026-33854, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499
+# All are fixed in Go 1.25.10 / 1.26.3. Pinning the toolchain here lets
+# us clear the gate without waiting on aptible/supercronic to cut a
+# new release.
+FROM golang:1.26.3-alpine AS supercronic-builder
+RUN apk add --no-cache git
+ARG SUPERCRONIC_VERSION=v0.2.45
+RUN git clone --depth 1 --branch ${SUPERCRONIC_VERSION} https://github.com/aptible/supercronic.git /src
+WORKDIR /src
+# Build static binaries for both arches we publish.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/supercronic-linux-amd64 . && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags='-s -w' -o /out/supercronic-linux-arm64 .
+
 FROM python:3.12-slim AS builder
 
 # Disable man pages and docs to speed up apt operations
@@ -83,12 +101,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq5 \
     curl
 
-# Install supercronic for cron jobs (container-friendly cron)
+# Copy the per-arch supercronic binary we just built from source on Go
+# 1.26.3. See the ``supercronic-builder`` stage header for the CVE list
+# that drove this off the upstream release binary.
 ARG TARGETARCH
-RUN SUPERCRONIC_ARCH=$(case "${TARGETARCH}" in "arm64") echo "linux-arm64" ;; *) echo "linux-amd64" ;; esac) && \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.41/supercronic-${SUPERCRONIC_ARCH}" \
-    -o /usr/local/bin/supercronic && \
-    chmod +x /usr/local/bin/supercronic
+COPY --from=supercronic-builder /out/supercronic-linux-${TARGETARCH} /usr/local/bin/supercronic
+RUN chmod +x /usr/local/bin/supercronic
 
 WORKDIR /app
 

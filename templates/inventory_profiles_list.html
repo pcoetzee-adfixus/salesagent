@@ -58,16 +58,26 @@
             </p>
         </header>
 
-        {% if bundles | length == 0 and not has_synced_inventory %}
-            {# ===== Onboarding empty state — no bundles, nothing synced ===== #}
+        {% if bundles | length == 0 %}
+            {# ===== Onboarding empty state ===== #}
+            {# Two flavors: no synced inventory yet (sync your adapter first) vs. #}
+            {# synced inventory present (surface real placements as seed bundles). #}
             <div class="onboard-card">
                 <div>
                     <h2 class="onboard-card__title">No bundles yet — that's expected.</h2>
-                    <p class="onboard-card__text">
-                        Bundles are the salable shapes buyers ask for. Start by promoting a few of your
-                        top-level placements into bundles, then peel off themed bundles from there
-                        ("premium news," "sports homepage," etc.).
-                    </p>
+                    {% if seed_suggestions %}
+                        <p class="onboard-card__text">
+                            You have synced inventory from <strong>{{ adapter_label }}</strong>. Operators usually
+                            start by promoting their top-level placements into bundles, then peel off themed
+                            bundles from there ("premium news," "sports homepage," etc.).
+                        </p>
+                    {% else %}
+                        <p class="onboard-card__text">
+                            Bundles are the salable shapes buyers ask for. Start by promoting a few of your
+                            top-level placements into bundles, then peel off themed bundles from there
+                            ("premium news," "sports homepage," etc.).
+                        </p>
+                    {% endif %}
                     <p class="onboard-card__text">
                         Bundles are <strong>reusable</strong> — the same placement can live in many bundles,
                         so you don't need to get the first one right.
@@ -84,12 +94,28 @@
                     </div>
                 </div>
                 <div class="onboard-suggestions">
-                    <h4>How to start</h4>
-                    <p class="onboard-card__text" style="margin: 0; font-size: 12.5px;">
-                        Sync your ad server first (Configure → Integrations), then come back here.
-                        Once synced inventory exists, this panel surfaces top-level placements as suggested
-                        starting bundles you can seed in one click.
-                    </p>
+                    {% if seed_suggestions %}
+                        <h4>Suggested starting bundles — from your top-level placements</h4>
+                        {% for s in seed_suggestions %}
+                            <a class="onboard-sug"
+                               href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id, seed_placement=s.external_id) }}">
+                                <div>
+                                    <div class="name">{{ s.name }}</div>
+                                    <div class="meta">Placement · {{ s.meta }}</div>
+                                </div>
+                                <span class="btn btn--outline btn--xs">
+                                    {{ icon_chev_right() }} Seed bundle
+                                </span>
+                            </a>
+                        {% endfor %}
+                    {% else %}
+                        <h4>How to start</h4>
+                        <p class="onboard-card__text" style="margin: 0; font-size: 12.5px;">
+                            Sync your ad server first (Configure → Integrations), then come back here.
+                            Once synced inventory exists, this panel surfaces top-level placements as suggested
+                            starting bundles you can seed in one click.
+                        </p>
+                    {% endif %}
                 </div>
             </div>
 
@@ -255,9 +281,18 @@
                                        href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}">
                                         Preview resolved shape
                                     </a>
-                                    <button class="item" role="menuitem" data-action="clone" data-id="{{ b.id }}">
-                                        Clone bundle
-                                    </button>
+                                    <form method="post"
+                                          action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}"
+                                          style="margin: 0;">
+                                        <button type="submit" class="item" role="menuitem">
+                                            Duplicate bundle
+                                        </button>
+                                    </form>
+                                    {# The Reuse flow lives at the inventory-item level, not
+                                       the bundle level — operators reach it from the "What's
+                                       not bundled" rail or (when #542 ships) from per-item
+                                       actions inside the editor. Removed the disabled stub
+                                       that used to sit here. #}
                                     <div class="sep"></div>
                                     <button class="item danger" role="menuitem"
                                             data-action="delete" data-id="{{ b.id }}" data-name="{{ b.name }}">
@@ -303,8 +338,11 @@
                                     <div class="nb-row__meta">{{ it.meta }}</div>
                                 </div>
                                 <div>
+                                    {# Routes to the Reuse page (#524) so the operator can
+                                       multi-select bundles in a single save — much faster than
+                                       creating a new bundle for one orphan item. #}
                                     <a class="btn btn--outline btn--sm"
-                                       href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}?seed_kind={{ it.kind }}&seed_id={{ it.adapter_id }}">
+                                       href="{{ url_for('inventory_profiles.reuse_inventory_bundles', tenant_id=tenant_id, item=it.adapter_id, kind=it.kind) }}">
                                         {{ icon_plus() }} Add to bundles…
                                     </a>
                                 </div>
@@ -403,23 +441,18 @@
         }
     });
 
-    // Clone is a placeholder — wire to a real endpoint in a follow-up.
-    // Delete posts to the existing /<id>/delete route.
+    // Duplicate posts via the menu's <form>. Delete fires a DELETE fetch.
     list.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-action]');
+        const btn = e.target.closest('[data-action="delete"]');
         if (!btn) return;
-        if (btn.dataset.action === 'clone') {
-            alert('Clone bundle — wiring lands in a follow-up.');
-        } else if (btn.dataset.action === 'delete') {
-            if (!confirm(`Delete bundle "${btn.dataset.name}"?`)) return;
-            const root = document.querySelector('.bundles-page');
-            const scriptRoot = root.dataset.scriptRoot || '';
-            const tenantId = root.dataset.tenantId;
-            fetch(`${scriptRoot}/admin/tenant/${tenantId}/inventory-profiles/${btn.dataset.id}/delete`, {
-                method: 'DELETE',
-                credentials: 'same-origin',
-            }).then(r => r.ok ? location.reload() : alert('Delete failed'));
-        }
+        if (!confirm(`Delete bundle "${btn.dataset.name}"?`)) return;
+        const root = document.querySelector('.bundles-page');
+        const scriptRoot = root.dataset.scriptRoot || '';
+        const tenantId = root.dataset.tenantId;
+        fetch(`${scriptRoot}/admin/tenant/${tenantId}/inventory-profiles/${btn.dataset.id}/delete`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        }).then(r => r.ok ? location.reload() : alert('Delete failed'));
     });
 
     // "What's not bundled" — collapsible rail.

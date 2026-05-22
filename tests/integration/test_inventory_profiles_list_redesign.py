@@ -17,13 +17,19 @@ import pytest
 from src.admin.app import create_app
 from src.admin.blueprints.inventory_profiles import (
     _build_bundle_card,
+    _build_bundle_summary,
     _build_coverage_summary,
+    _compute_blast_radius,
+    _list_products_using,
+    _list_seed_suggestions,
     _list_unbundled_inventory,
+    _resolve_inventory_names,
 )
 from src.services.inventory_bundle_reference_sync import recompute_bundle_references
 from tests.factories import (
     GAMInventoryFactory,
     InventoryProfileFactory,
+    ProductFactory,
     TenantFactory,
 )
 
@@ -216,6 +222,309 @@ class TestUnbundledInventory:
         )
 
         rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50)
+
+        assert rows == []
+
+
+class TestListSeedSuggestions:
+    """``_list_seed_suggestions`` surfaces synced GAM placements for the empty state."""
+
+    def test_returns_placements_only(self, factory_session):
+        """Ad units don't surface as seed candidates — only placements."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="P1",
+            name="Homepage Premium",
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="AU1",
+            name="homepage / top-banner",
+        )
+
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+
+        assert len(rows) == 1
+        assert rows[0]["external_id"] == "P1"
+        assert rows[0]["name"] == "Homepage Premium"
+
+    def test_respects_limit(self, factory_session):
+        """Caller's limit caps the result set."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        for i in range(10):
+            GAMInventoryFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                inventory_type="placement",
+                inventory_id=f"P{i}",
+                name=f"Placement {i:02d}",
+            )
+
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+
+        assert len(rows) == 5
+
+    def test_other_tenants_ignored(self, factory_session):
+        """Cross-tenant isolation — placements from other tenants don't leak in."""
+        tenant_a = TenantFactory(ad_server="google_ad_manager")
+        tenant_b = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_type="placement",
+            inventory_id="OTHER",
+            name="Other tenant placement",
+        )
+
+        rows = _list_seed_suggestions(factory_session, tenant_a.tenant_id, limit=5)
+
+        assert rows == []
+
+
+class TestBuildBundleSummary:
+    """``_build_bundle_summary`` shapes one profile for the edit-page sidebar."""
+
+    def test_minimal_profile_summary(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": [], "include_descendants": True},
+            format_ids=[],
+            publisher_properties=[],
+        )
+
+        summary = _build_bundle_summary(profile, product_count=0, adapter_label="Google Ad Manager")
+
+        assert summary["adapter_label"] == "Google Ad Manager"
+        assert summary["ad_unit_count"] == 0
+        assert summary["placement_count"] == 0
+        assert summary["format_count"] == 0
+        assert summary["products_using"] == 0
+
+    def test_counts_reflect_inventory_and_properties(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["a", "b"], "placements": ["p1", "p2", "p3"]},
+            format_ids=[{"agent_url": "x", "id": "fmt1"}, {"agent_url": "x", "id": "fmt2"}],
+            publisher_properties=[
+                {"publisher_domain": "a.com", "property_tags": ["premium", "news"], "selection_type": "by_tag"},
+            ],
+        )
+
+        summary = _build_bundle_summary(profile, product_count=3, adapter_label="Google Ad Manager")
+
+        assert summary["ad_unit_count"] == 2
+        assert summary["placement_count"] == 3
+        assert summary["format_count"] == 2
+        assert summary["property_mode"] == "tags"
+        assert summary["property_tag_count"] == 2
+        assert summary["products_using"] == 3
+
+
+class TestComputeBlastRadius:
+    """``_compute_blast_radius`` flags placements/units this bundle shares with siblings."""
+
+    def test_no_siblings_returns_empty(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["a"], "placements": ["p1"]},
+        )
+
+        assert _compute_blast_radius(factory_session, tenant.tenant_id, profile) == []
+
+    def test_shared_placement_appears_in_blast_radius(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1", "p2"]},
+        )
+        # Two siblings include the same placement p1; one includes p2; none touch p3.
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1"]},
+        )
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1", "p2"]},
+        )
+
+        result = _compute_blast_radius(factory_session, tenant.tenant_id, profile)
+        by_id = {r["external_id"]: r for r in result}
+
+        assert by_id["p1"]["kind"] == "placement"
+        assert by_id["p1"]["others"] == 2
+        assert by_id["p2"]["others"] == 1
+
+    def test_other_tenants_dont_count(self, factory_session):
+        tenant_a = TenantFactory()
+        tenant_b = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant_a,
+            tenant_id=tenant_a.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["shared_id"]},
+        )
+        # Other tenant has a bundle with the same external_id — must NOT bleed in.
+        InventoryProfileFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["shared_id"]},
+        )
+
+        assert _compute_blast_radius(factory_session, tenant_a.tenant_id, profile) == []
+
+
+class TestResolveInventoryNames:
+    """``_resolve_inventory_names`` turns raw GAM IDs into human names (#530)."""
+
+    def test_empty_inventory_returns_empty_maps(self, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": []},
+        )
+
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+
+        assert result == {"ad_units": {}, "placements": {}}
+
+    def test_resolves_synced_ad_units_and_placements(self, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au1",
+            name="Homepage / Top",
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="p1",
+            name="Premium News",
+        )
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["au1"], "placements": ["p1"]},
+        )
+
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+
+        assert result["ad_units"]["au1"]["name"] == "Homepage / Top"
+        assert result["placements"]["p1"]["name"] == "Premium News"
+
+    def test_unresolved_ids_omitted(self, factory_session):
+        """IDs in the bundle but not in GAM sync stay out of the map.
+
+        The template falls back to rendering the raw ID with an "unresolved"
+        marker — the helper doesn't need to do that work.
+        """
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        # Only one of the two ad units is synced.
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_known",
+            name="Known",
+        )
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["au_known", "au_missing"], "placements": []},
+        )
+
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+
+        assert "au_known" in result["ad_units"]
+        assert "au_missing" not in result["ad_units"]
+
+    def test_cross_tenant_isolation(self, factory_session):
+        tenant_a = TenantFactory(ad_server="google_ad_manager")
+        tenant_b = TenantFactory(ad_server="google_ad_manager")
+        # Same external_id under two tenants — must NOT leak.
+        GAMInventoryFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="shared_id",
+            name="From tenant B",
+        )
+        profile = InventoryProfileFactory(
+            tenant=tenant_a,
+            tenant_id=tenant_a.tenant_id,
+            inventory_config={"ad_units": ["shared_id"], "placements": []},
+        )
+
+        result = _resolve_inventory_names(factory_session, tenant_a.tenant_id, profile)
+
+        assert result["ad_units"] == {}
+
+
+class TestListProductsUsing:
+    """``_list_products_using`` lists products referencing this bundle (#530)."""
+
+    def test_no_products_returns_empty(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id)
+
+        rows = _list_products_using(factory_session, tenant.tenant_id, profile.id)
+
+        assert rows == []
+
+    def test_returns_referencing_products(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id)
+        ProductFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            name="Homepage Display",
+            inventory_profile_id=profile.id,
+        )
+        ProductFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            name="Sports Bundle",
+            inventory_profile_id=profile.id,
+        )
+        # Unrelated product — must not appear.
+        ProductFactory(tenant=tenant, tenant_id=tenant.tenant_id, inventory_profile_id=None)
+
+        rows = _list_products_using(factory_session, tenant.tenant_id, profile.id)
+
+        names = [r["name"] for r in rows]
+        assert "Homepage Display" in names
+        assert "Sports Bundle" in names
+        assert len(rows) == 2
+
+    def test_cross_tenant_isolation(self, factory_session):
+        tenant_a = TenantFactory()
+        tenant_b = TenantFactory()
+        profile_a = InventoryProfileFactory(tenant=tenant_a, tenant_id=tenant_a.tenant_id)
+        # Tenant B has a product matching the SAME numeric profile.id (FK is integer);
+        # the helper must scope by tenant_id to avoid leakage.
+        ProductFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_profile_id=profile_a.id,
+        )
+
+        rows = _list_products_using(factory_session, tenant_a.tenant_id, profile_a.id)
 
         assert rows == []
 

@@ -52,6 +52,20 @@ def _generate_profile_id(name: str) -> str:
     return profile_id
 
 
+def _unique_profile_id(session, tenant_id: str, base: str) -> str:
+    """Return a tenant-unique profile_id, suffixing _2, _3, ... if needed."""
+    existing = set(
+        session.scalars(select(InventoryProfile.profile_id).where(InventoryProfile.tenant_id == tenant_id)).all()
+    )
+    if base not in existing:
+        return base
+    for i in range(2, 1000):
+        candidate = f"{base}_{i}"
+        if candidate not in existing:
+            return candidate
+    raise RuntimeError(f"Could not find unique profile_id for {base}")
+
+
 def _get_inventory_summary(inventory_config: dict) -> str:
     """Generate human-readable inventory summary.
 
@@ -160,6 +174,10 @@ def list_inventory_profiles(tenant_id: str):
             adapter_label = "Google Ad Manager"
             adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
             has_synced_inventory = (coverage["adUnitsTotal"] + coverage["placementsTotal"]) > 0
+            # Seed suggestions: surface synced placements as "promote into a bundle"
+            # candidates when the tenant has zero bundles. The list is a peek (5
+            # max) — operators with hundreds of placements use the full browser.
+            seed_suggestions = _list_seed_suggestions(session, tenant_id, limit=5) if len(bundles_data) == 0 else []
         else:
             coverage = None
             unbundled_items = []
@@ -168,6 +186,7 @@ def list_inventory_profiles(tenant_id: str):
             )
             adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
             has_synced_inventory = False
+            seed_suggestions = []
 
     return render_template(
         "inventory_profiles_list.html",
@@ -179,6 +198,7 @@ def list_inventory_profiles(tenant_id: str):
         adapter_label=adapter_label,
         adapter_vocab=adapter_vocab,
         has_synced_inventory=has_synced_inventory,
+        seed_suggestions=seed_suggestions,
     )
 
 
@@ -311,6 +331,154 @@ def _list_unbundled_inventory(session, tenant_id: str, limit: int) -> list[dict]
             "id": str(row.id),
             "adapter_id": row.inventory_id,
             "kind": row.inventory_type,
+            "name": row.name,
+            "meta": _format_inventory_meta(row),
+        }
+        for row in rows
+    ]
+
+
+def _build_bundle_summary(profile: InventoryProfile, product_count: int, adapter_label: str) -> dict:
+    """Sidebar summary payload for the edit page.
+
+    Shapes the bundle for at-a-glance review: inventory totals, format count,
+    property mode, product usage. The template reads these keys directly.
+    """
+    config = profile.inventory_config or {}
+    publisher_properties = profile.publisher_properties or []
+
+    property_tags: list[str] = []
+    property_id_count = 0
+    for prop in publisher_properties:
+        property_tags.extend(prop.get("property_tags") or [])
+        property_id_count += len(prop.get("property_ids") or [])
+    property_mode = "tags" if property_tags or not property_id_count else "ids"
+
+    return {
+        "adapter_label": adapter_label,
+        "ad_unit_count": len(config.get("ad_units") or []),
+        "placement_count": len(config.get("placements") or []),
+        "format_count": len(profile.format_ids or []),
+        "property_mode": property_mode,
+        "property_tag_count": len(set(property_tags)),
+        "property_id_count": property_id_count,
+        "products_using": product_count,
+    }
+
+
+def _compute_blast_radius(session, tenant_id: str, profile: InventoryProfile) -> list[dict]:
+    """Which placements/ad units in this bundle also appear in other bundles.
+
+    "Blast radius" = inventory shared with sibling bundles. Reads as context,
+    not a warning — bundles share placements, not state, so edits here are
+    local. Returned as ``[{kind, external_id, others}]`` where ``others`` is
+    the count of *other* bundles also referencing that external_id.
+
+    Builds a single ``{external_id -> set(bundle_ids)}`` index per entity type
+    so lookups are O(1). A naive double-loop is O(N · M) over bundles ×
+    placements, which gets expensive past a few hundred bundles.
+    """
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    repo = InventoryProfileRepository(session, tenant_id)
+    all_bundles = repo.list_all()
+
+    my_config = profile.inventory_config or {}
+    my_placements = my_config.get("placements") or []
+    my_ad_units = my_config.get("ad_units") or []
+    if not my_placements and not my_ad_units:
+        return []
+
+    placement_index: dict[str, set[int]] = {}
+    ad_unit_index: dict[str, set[int]] = {}
+    for b in all_bundles:
+        if b.id == profile.id:
+            continue
+        cfg = b.inventory_config or {}
+        for ext_id in cfg.get("placements") or []:
+            placement_index.setdefault(ext_id, set()).add(b.id)
+        for ext_id in cfg.get("ad_units") or []:
+            ad_unit_index.setdefault(ext_id, set()).add(b.id)
+
+    reused: list[dict] = []
+    for ext_id in my_placements:
+        bundles = placement_index.get(ext_id)
+        if bundles:
+            reused.append({"kind": "placement", "external_id": ext_id, "others": len(bundles)})
+    for ext_id in my_ad_units:
+        bundles = ad_unit_index.get(ext_id)
+        if bundles:
+            reused.append({"kind": "ad_unit", "external_id": ext_id, "others": len(bundles)})
+
+    return reused
+
+
+def _resolve_inventory_names(
+    session, tenant_id: str, profile: InventoryProfile
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Map external IDs in the bundle's inventory_config to human-readable names.
+
+    Solves the editor's "raw GAM IDs are unverifiable" problem (#530).
+    Operators editing a bundle see chips labelled
+    ``"tribune.com / home / top-banner (#21801001)"`` instead of bare IDs.
+
+    Returns shape::
+
+        {
+            "ad_units": { external_id: {"name": ..., "id": external_id}, ... },
+            "placements": { external_id: {"name": ..., "id": external_id}, ... },
+        }
+
+    Missing IDs (e.g., the entity was deleted in GAM after the bundle saved)
+    don't appear in the map — the template falls back to showing the raw ID.
+    GAM-only today; FW/SS land when their syncs participate.
+    """
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    config = profile.inventory_config or {}
+    ad_unit_ids = list(config.get("ad_units") or [])
+    placement_ids = list(config.get("placements") or [])
+    if not ad_unit_ids and not placement_ids:
+        return {"ad_units": {}, "placements": {}}
+
+    repo = GAMSyncRepository(session, tenant_id)
+    ad_unit_rows = repo.list_inventory_by_ids("ad_unit", ad_unit_ids)
+    placement_rows = repo.list_inventory_by_ids("placement", placement_ids)
+
+    return {
+        "ad_units": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in ad_unit_rows},
+        "placements": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in placement_rows},
+    }
+
+
+def _list_products_using(session, tenant_id: str, profile_id: int) -> list[dict]:
+    """Products that reference this bundle, with name + id for sidebar rendering.
+
+    Tenant-scoped via the repository. Used by the edit page's Summary card to
+    expand the bare "Used by N products" count into linkable product names
+    (#530). Capped client-side to top-5 + "+N more" overflow.
+    """
+    from src.core.database.repositories.product import ProductRepository
+
+    rows = ProductRepository(session, tenant_id).list_by_inventory_profile(profile_id)
+    return [{"product_id": r.product_id, "name": r.name} for r in rows]
+
+
+def _list_seed_suggestions(session, tenant_id: str, limit: int) -> list[dict]:
+    """Synced GAM placements to surface as "promote into a bundle" candidates.
+
+    Empty-state UX (#481): a fresh tenant with thousands of synced ad units sees
+    a paralysing blank canvas. Promoting placements is the no-think starting
+    point. We show up to ``limit`` placements ordered by name; the heuristic can
+    grow more sophisticated (e.g. by descendant count) once we have ground-truth
+    data on which seeds operators actually accept.
+    """
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    rows = GAMSyncRepository(session, tenant_id).list_inventory("placement", limit=limit)
+    return [
+        {
+            "external_id": row.inventory_id,
             "name": row.name,
             "meta": _format_inventory_meta(row),
         }
@@ -578,28 +746,49 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 publisher_domain = tenant_obj.primary_domain
 
                 if property_mode == "tags":
-                    # by_tag mode: Parse comma-separated tags
-                    property_tags_str = form_data.get("property_tags", "").strip()
-                    if not property_tags_str:
-                        flash("Property tags are required", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-
-                    # Validate tag format per AdCP spec
+                    # Multi-domain (#532): each row in the editor is a
+                    # ``(publisher_domain, tags)`` pair. Inputs arrive as
+                    # parallel ``domain[]`` + ``property_tags[]`` lists.
+                    # Falling back to the single ``property_tags`` field
+                    # keeps single-row callers (legacy POSTs, the GAM
+                    # product config form) working.
                     import re
 
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
-                    property_tags = []
-                    for tag in property_tags_str.split(","):
-                        tag = tag.strip().lower()
-                        if tag and TAG_PATTERN.match(tag):
-                            property_tags.append(tag)
-                        elif tag:
+                    TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
+                    rows_domains = request.form.getlist("publisher_domain[]")
+                    rows_tags_raw = request.form.getlist("property_tags[]")
+                    if not rows_domains:
+                        # Legacy single-row submission.
+                        rows_domains = [tenant_obj.primary_domain]
+                        rows_tags_raw = [form_data.get("property_tags", "")]
+
+                    publisher_props: list[dict] = []
+                    for row_idx, (domain, tag_str) in enumerate(zip(rows_domains, rows_tags_raw, strict=False)):
+                        domain = (domain or "").strip()
+                        if not domain:
+                            flash(f"Row {row_idx + 1}: publisher domain is required", "error")
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
+                        tags_in = [t.strip().lower() for t in (tag_str or "").split(",")]
+                        tags_clean = [t for t in tags_in if t]
+                        if not tags_clean:
+                            flash(f"Row {row_idx + 1} ({domain}): add at least one property tag", "error")
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
+                        bad = next((t for t in tags_clean if not TAG_PATTERN.match(t)), None)
+                        if bad:
                             flash(
-                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
+                                f"Row {row_idx + 1} ({domain}): tag '{bad}' must use lowercase, numbers, underscores.",
                                 "error",
                             )
                             return redirect(
@@ -609,22 +798,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                                     profile_id=profile_id,
                                 )
                             )
-
-                    if not property_tags:
-                        flash("At least one valid property tag is required", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
+                        publisher_props.append(
+                            {
+                                "publisher_domain": domain,
+                                "property_tags": tags_clean,
+                                "selection_type": "by_tag",
+                            }
                         )
-
-                    profile.publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_tags": property_tags,
-                            "selection_type": "by_tag",
-                        }
-                    ]
+                    profile.publisher_properties = publisher_props
 
                 elif property_mode == "property_ids":
                     # by_id mode: Parse selected_property_ids checkboxes
@@ -736,6 +917,52 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
+        # Distinct publisher_domains the tenant can author against (#532).
+        # AuthorizedProperty already enforces one row per (tenant, property)
+        # under a domain. We union with the tenant's primary_domain so newly
+        # provisioned tenants (no AuthorizedProperty rows yet) still see at
+        # least one valid option.
+        domain_rows = session.scalars(
+            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
+        ).all()
+        tenant_domains = sorted({tenant.primary_domain, *domain_rows})
+
+        # Initial tag-mode rows for progressive-enhancement render (#532).
+        # If the bundle is in tag mode, one row per existing publisher_properties
+        # entry; else a single row pinned to the primary domain so a brand-new
+        # bundle still ships with a sane default.
+        tag_rows: list[dict] = []
+        for prop in profile.publisher_properties or []:
+            if prop.get("property_tags"):
+                tag_rows.append(
+                    {
+                        "domain": prop.get("publisher_domain", tenant.primary_domain),
+                        "tags": ", ".join(prop.get("property_tags") or []),
+                    }
+                )
+        if not tag_rows:
+            tag_rows = [{"domain": tenant.primary_domain, "tags": ""}]
+
+        product_count = (
+            session.scalar(select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id))
+            or 0
+        )
+        adapter_label = (
+            "Google Ad Manager"
+            if tenant.ad_server in {"google_ad_manager", "gam"}
+            else (tenant.ad_server or "your ad server").replace("_", " ").title()
+        )
+        bundle_summary = _build_bundle_summary(profile, product_count, adapter_label)
+        blast_radius = _compute_blast_radius(session, tenant_id, profile)
+
+        # GAM-only resolution. Other adapters fall back to raw IDs until their
+        # sync surfaces (mock has no inventory table so we skip the lookup).
+        if tenant.ad_server in {"google_ad_manager", "gam"}:
+            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
+        else:
+            inventory_names = {"ad_units": {}, "placements": {}}
+        products_using = _list_products_using(session, tenant_id, profile_id)
+
         # Render inside the session so JSON columns (``profile.format_ids``,
         # ``profile.inventory_config``, etc.) are accessible from the template.
         # Outside the ``with`` the instance is detached and SQLAlchemy raises
@@ -748,7 +975,246 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             profile=profile,
             authorized_properties=authorized_properties,
             property_tags=property_tags_list,
+            tenant_domains=tenant_domains,
+            tag_rows=tag_rows,
+            bundle_summary=bundle_summary,
+            blast_radius=blast_radius,
+            inventory_names=inventory_names,
+            products_using=products_using,
             active_tab="inventory_profiles",
+        )
+
+
+def _resolve_reuse_source(session, tenant_id: str, external_id: str, kind: str) -> dict | None:
+    """Look up the ad_unit or placement being reused (#524).
+
+    Returns a dict the template can render directly: ``{name, external_id,
+    kind, meta, found}``. When the entity isn't in the synced GAM inventory
+    table (e.g., deleted upstream), ``found=False`` and ``name`` falls back
+    to the raw id so the operator can still see what they clicked.
+    """
+    if kind not in {"placement", "ad_unit"}:
+        return None
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    row = GAMSyncRepository(session, tenant_id).find_inventory_item(kind, external_id)
+    if row is None:
+        return {
+            "external_id": external_id,
+            "kind": kind,
+            "name": external_id,
+            "meta": "Not found in synced inventory",
+            "found": False,
+        }
+    return {
+        "external_id": row.inventory_id,
+        "kind": row.inventory_type,
+        "name": row.name,
+        "meta": _format_inventory_meta(row),
+        "found": True,
+    }
+
+
+def _bundle_membership_picklist(session, tenant_id: str, external_id: str, kind: str) -> list[dict]:
+    """Per-bundle picklist payload for the Reuse page (#524).
+
+    Each entry: ``{id, name, description, profile_id, already, summary,
+    products_using}``. ``already`` is true when this bundle already contains
+    the entity — those rows render as "already includes" in the template.
+    """
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    bundles = InventoryProfileRepository(session, tenant_id).list_all()
+
+    # Product counts in a single query to avoid N+1.
+    product_counts = dict(
+        session.execute(
+            select(Product.inventory_profile_id, func.count(Product.product_id))
+            .where(Product.tenant_id == tenant_id)
+            .group_by(Product.inventory_profile_id)
+        ).all()
+    )
+
+    config_key = "ad_units" if kind == "ad_unit" else "placements"
+    out: list[dict] = []
+    for b in bundles:
+        cfg = b.inventory_config or {}
+        ids_in_bundle = cfg.get(config_key) or []
+        already = external_id in ids_in_bundle
+        au_count = len(cfg.get("ad_units") or [])
+        pl_count = len(cfg.get("placements") or [])
+        fmt_count = len(b.format_ids or [])
+        shape_parts = []
+        if pl_count:
+            shape_parts.append(f"{pl_count} {'placement' if pl_count == 1 else 'placements'}")
+        if au_count:
+            shape_parts.append(f"{au_count} {'ad unit' if au_count == 1 else 'ad units'}")
+        out.append(
+            {
+                "id": b.id,
+                "name": b.name,
+                "description": b.description or "",
+                "profile_id": b.profile_id,
+                "already": already,
+                "summary": ", ".join(shape_parts) if shape_parts else "no inventory",
+                "format_count": fmt_count,
+                "products_using": int(product_counts.get(b.id, 0)),
+            }
+        )
+    # Already-includes at the top so the operator sees what's done first.
+    out.sort(key=lambda r: (not r["already"], r["name"].lower()))
+    return out
+
+
+@inventory_profiles_bp.route("/reuse")
+@require_tenant_access()
+def reuse_inventory_bundles(tenant_id: str):
+    """Render the reverse-add picker: one inventory item → many bundles (#524).
+
+    Query params:
+        item: external_id of the ad_unit or placement being reused.
+        kind: ``placement`` | ``ad_unit``.
+    """
+    external_id = (request.args.get("item") or "").strip()
+    kind = (request.args.get("kind") or "").strip()
+    if not external_id or kind not in {"placement", "ad_unit"}:
+        flash("Missing item or kind for Reuse — pick a row from the bundles list.", "error")
+        return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+    with get_db_session() as session:
+        tenant = session.get(Tenant, tenant_id)
+        source = _resolve_reuse_source(session, tenant_id, external_id, kind)
+        bundles = _bundle_membership_picklist(session, tenant_id, external_id, kind)
+        adapter_label = (
+            "Google Ad Manager"
+            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
+        )
+
+        return render_template(
+            "reuse_inventory_bundles.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            adapter_label=adapter_label,
+            source=source,
+            bundles=bundles,
+            active_tab="inventory_profiles",
+        )
+
+
+@inventory_profiles_bp.route("/reuse", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("reuse_inventory_to_bundles")
+def reuse_inventory_bundles_save(tenant_id: str):
+    """Apply the reverse-add diff: insert the item into selected bundles (#524).
+
+    Only adds — never removes. The operator who wants to remove an item
+    from a bundle does so from that bundle's editor. This avoids accidental
+    bulk-deletes from the reuse page.
+    """
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    external_id = (request.form.get("item") or "").strip()
+    kind = (request.form.get("kind") or "").strip()
+    if not external_id or kind not in {"placement", "ad_unit"}:
+        flash("Missing item or kind on Reuse submission.", "error")
+        return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+    selected_ids = [int(b) for b in request.form.getlist("bundle_ids") if b.strip().isdigit()]
+    if not selected_ids:
+        flash("Pick at least one bundle to add this to.", "warning")
+        return redirect(
+            url_for(
+                "inventory_profiles.reuse_inventory_bundles",
+                tenant_id=tenant_id,
+                item=external_id,
+                kind=kind,
+            )
+        )
+
+    config_key = "ad_units" if kind == "ad_unit" else "placements"
+    added_to: list[str] = []
+    skipped_count = 0
+    with get_db_session() as session:
+        repo = InventoryProfileRepository(session, tenant_id)
+        for pk in selected_ids:
+            bundle = repo.get_by_pk(pk)
+            if bundle is None:
+                # Cross-tenant or stale id — silently skip; nothing to log.
+                continue
+            cfg = dict(bundle.inventory_config or {})
+            current = list(cfg.get(config_key) or [])
+            if external_id in current:
+                skipped_count += 1
+                continue
+            current.append(external_id)
+            cfg[config_key] = current
+            bundle.inventory_config = cfg
+            added_to.append(bundle.name)
+        recompute_bundle_references(session, tenant_id)
+        session.commit()
+
+    if added_to:
+        flash(
+            f"Added to {len(added_to)} {'bundle' if len(added_to) == 1 else 'bundles'}: {', '.join(added_to)}.",
+            "success",
+        )
+    if skipped_count:
+        flash(
+            f"{skipped_count} {'bundle' if skipped_count == 1 else 'bundles'} already had this item — left alone.",
+            "info",
+        )
+    return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+
+@inventory_profiles_bp.route("/<int:profile_id>/duplicate", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("duplicate_inventory_profile")
+def duplicate_inventory_profile(tenant_id: str, profile_id: int):
+    """Duplicate an inventory bundle and open the copy in the editor.
+
+    Copies bundle-shaped fields (inventory, formats, properties, targeting, constraints,
+    description) but does NOT copy GAM preset bindings — those are 1:1 with a single bundle
+    and would create ambiguous sync targets.
+    """
+    with get_db_session() as session:
+        source = session.get(InventoryProfile, profile_id)
+        if not source or source.tenant_id != tenant_id:
+            flash("Inventory bundle not found", "error")
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+        new_name = f"{source.name} (copy)"
+        new_profile_id = _unique_profile_id(session, tenant_id, _generate_profile_id(new_name))
+
+        copy = InventoryProfile(
+            tenant_id=tenant_id,
+            profile_id=new_profile_id,
+            name=new_name,
+            description=source.description,
+            inventory_config=source.inventory_config,
+            format_ids=source.format_ids,
+            publisher_properties=source.publisher_properties,
+            targeting_template=source.targeting_template,
+            constraints=source.constraints,
+        )
+        session.add(copy)
+        session.flush()
+        new_id = copy.id
+        # Pick up the new bundle in the bundle-reference index (#485).
+        recompute_bundle_references(session, tenant_id)
+        session.commit()
+
+        flash(f"Duplicated '{source.name}' — editing the copy now.", "success")
+        # ``duplicated=1`` lets the editor autofocus + select the name field
+        # so renaming is a single keystroke. User-engagement reviewer (#528)
+        # called this the highest-leverage friction fix on the page.
+        return redirect(
+            url_for(
+                "inventory_profiles.edit_inventory_profile",
+                tenant_id=tenant_id,
+                profile_id=new_id,
+                duplicated=1,
+            )
         )
 
 
@@ -803,6 +1269,17 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
         if not profile or profile.tenant_id != tenant_id:
             return jsonify({"error": "Inventory bundle not found"}), 404
 
+        # Derive property_mode from publisher_properties shape — the same
+        # logic the template uses (#528). Hardcoding "all" was a bug:
+        # agents pulling the API would mis-render bundles that were saved
+        # in tag or property-id mode.
+        property_tags: list[str] = []
+        property_id_count = 0
+        for prop in profile.publisher_properties or []:
+            property_tags.extend(prop.get("property_tags") or [])
+            property_id_count += len(prop.get("property_ids") or [])
+        property_mode = "tags" if property_tags or not property_id_count else "property_ids"
+
         return jsonify(
             {
                 "id": profile.id,
@@ -815,16 +1292,79 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
                 "include_descendants": profile.inventory_config.get("include_descendants", True),
                 "formats": profile.format_ids,
                 "publisher_properties": profile.publisher_properties,
-                "property_mode": "all",  # Default to "all" mode for now (no DB column yet)
+                "property_mode": property_mode,
                 "targeting_template": profile.targeting_template,
             }
         )
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/preview")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def preview_inventory_profile(tenant_id: str, profile_id: int):
-    """Get inventory profile preview for product form (API endpoint)."""
+    """HTML preview of how a buyer's agent sees this bundle via ``list_products``.
+
+    The "shipped something" moment for operators (#531) — clicking Preview on
+    the edit page or the list-page overflow now lands on a real page that
+    renders the bundle's buyer-facing shape, not the JSON dump the route used
+    to return.
+
+    Old JSON consumers (the GAM product config form) go through the sibling
+    ``/api/preview`` route below.
+    """
+    with get_db_session() as session:
+        profile = session.get(InventoryProfile, profile_id)
+        if not profile or profile.tenant_id != tenant_id:
+            flash("Inventory bundle not found", "error")
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+        tenant = session.get(Tenant, tenant_id)
+        adapter_label = (
+            "Google Ad Manager"
+            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
+        )
+
+        # Resolve external IDs to human names so the buyer-shape preview
+        # mirrors what the chips on the editor now show (#530).
+        if tenant and tenant.ad_server in {"google_ad_manager", "gam"}:
+            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
+        else:
+            inventory_names = {"ad_units": {}, "placements": {}}
+
+        # Property summary as a structured payload the template can render
+        # (vs the comma-separated string the JSON endpoint produces).
+        publisher_properties = profile.publisher_properties or []
+        property_tags: list[str] = []
+        property_id_count = 0
+        for prop in publisher_properties:
+            property_tags.extend(prop.get("property_tags") or [])
+            property_id_count += len(prop.get("property_ids") or [])
+        property_mode = "tags" if property_tags or not property_id_count else "ids"
+
+        return render_template(
+            "preview_inventory_profile.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            profile=profile,
+            adapter_label=adapter_label,
+            inventory_names=inventory_names,
+            property_mode=property_mode,
+            property_tags=sorted(set(property_tags)),
+            property_id_count=property_id_count,
+            publisher_properties=publisher_properties,
+            active_tab="inventory_profiles",
+        )
+
+
+@inventory_profiles_bp.route("/<int:profile_id>/api/preview")
+@require_tenant_access(api_mode=True)
+def preview_inventory_profile_api(tenant_id: str, profile_id: int):
+    """JSON preview payload for callers that need machine-readable shape.
+
+    Carved out of the original ``/preview`` route (#531) so the user-facing
+    URL can serve HTML. The GAM product-config JS still hits this; the
+    response shape is unchanged.
+    """
     with get_db_session() as session:
         profile = session.get(InventoryProfile, profile_id)
 

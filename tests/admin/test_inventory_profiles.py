@@ -8,6 +8,7 @@ import json
 
 import pytest
 from sqlalchemy import delete, select
+from werkzeug.datastructures import MultiDict
 
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
@@ -216,11 +217,384 @@ class TestInventoryProfileDelete:
             profile = session.get(InventoryProfile, profile_pk)
         assert profile is None
 
-    def test_delete_nonexistent_profile_returns_404(self, client, test_tenant):
-        """POST delete for a nonexistent profile returns 404."""
+    def test_delete_nonexistent_profile_via_post_flashes_and_redirects(self, client, test_tenant):
+        """POST delete for a nonexistent profile flashes and redirects to the list."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
             follow_redirects=False,
         )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_delete_nonexistent_profile_via_delete_returns_404(self, client, test_tenant):
+        """DELETE for a nonexistent profile returns 404 JSON."""
+        _auth_session(client, test_tenant)
+        response = client.delete(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
+        )
         assert response.status_code == 404
+
+
+class TestInventoryProfileEdit:
+    """Test the redesigned edit page renders with the new sidebar data."""
+
+    def test_edit_get_renders_with_summary_and_blast_radius(self, client, test_tenant):
+        """GET /<id>/edit returns 200 and includes the new sidebar cards."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Editable", profile_id="editable")
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        # Sidebar cards
+        assert "Summary" in html
+        assert "Also in other bundles" in html
+        # Section cards in main column
+        assert "Basics" in html
+        assert "Inventory" in html
+        assert "Creative formats" in html
+        # Sticky form bar
+        assert "Save bundle" in html
+        assert "Preview" in html  # action moved into formbar
+        assert "Duplicate" in html  # action moved into formbar
+        # Back link to list page
+        assert "Back to Inventory bundles" in html
+
+
+class TestInventoryProfilePreview:
+    """Preview surface — HTML at /preview, JSON at /api/preview (#531)."""
+
+    def test_html_preview_renders_buyer_facing_shape(self, client, test_tenant):
+        """GET /<id>/preview returns HTML rendering the bundle as a buyer sees it."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Buyer View Bundle", profile_id="buyer_view")
+
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/preview")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("text/html")
+        html = response.data.decode()
+        # The buyer-facing card surfaces the bundle's user-visible fields.
+        assert "Buyer View Bundle" in html
+        assert "Accepted creative formats" in html
+        assert "Publisher properties" in html
+        # Page framing makes the "as buyer sees it" intent clear.
+        assert "list_products" in html
+        # Back link to editor.
+        assert f"/inventory-profiles/{pk}/edit" in html
+
+    def test_html_preview_missing_bundle_redirects_to_list(self, client, test_tenant):
+        """A missing bundle PK flashes and redirects to the list page, not 404 JSON."""
+        _auth_session(client, test_tenant)
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/preview",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_json_preview_endpoint_still_works(self, client, test_tenant):
+        """/<id>/api/preview keeps returning JSON for machine callers (e.g. GAM product form)."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="JSON Caller Bundle", profile_id="json_caller")
+
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/api/preview")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("application/json")
+        data = response.get_json()
+        assert data["name"] == "JSON Caller Bundle"
+        # Shape unchanged from the legacy endpoint.
+        for key in ("id", "profile_id", "ad_unit_count", "placement_count", "format_count"):
+            assert key in data
+
+    def test_json_preview_404s_for_missing_bundle(self, client, test_tenant):
+        """JSON endpoint preserves its 404-with-error-body contract."""
+        _auth_session(client, test_tenant)
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/999999/api/preview")
+        assert response.status_code == 404
+        assert response.get_json()["error"]
+
+
+class TestInventoryReuseFlow:
+    """Reverse-add Reuse page (#524) — one item → many bundles in one save."""
+
+    def test_get_reuse_renders_picklist_with_membership(self, client, test_tenant):
+        """GET /reuse?item=...&kind=... renders picklist with already-includes marker."""
+        _auth_session(client, test_tenant)
+        # Two bundles: one already contains au_1, one doesn't.
+        _create_sample_profile(test_tenant, name="Already Has It", profile_id="has_it")
+        with get_db_session() as session:
+            already = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.profile_id == "has_it",
+                )
+            ).first()
+            already.inventory_config = {"ad_units": ["au_1"], "placements": [], "include_descendants": True}
+            session.commit()
+        _create_sample_profile(test_tenant, name="Empty Bundle", profile_id="empty")
+
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse?item=au_1&kind=ad_unit"
+        )
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "Add to bundles" in html
+        assert "Already Has It" in html
+        assert "Empty Bundle" in html
+        assert "Already includes this" in html
+
+    def test_get_reuse_missing_params_redirects_to_list(self, client, test_tenant):
+        """Missing item/kind flashes + redirects to the list page."""
+        _auth_session(client, test_tenant)
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_post_reuse_adds_item_to_selected_bundles(self, client, test_tenant):
+        """POST adds the item to each selected bundle's inventory_config.ad_units."""
+        _auth_session(client, test_tenant)
+        a = _create_sample_profile(test_tenant, name="Bundle A", profile_id="a")
+        b = _create_sample_profile(test_tenant, name="Bundle B", profile_id="b")
+        _create_sample_profile(test_tenant, name="Bundle C (not picked)", profile_id="c")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict(
+                [
+                    ("item", "new_au"),
+                    ("kind", "ad_unit"),
+                    ("bundle_ids", str(a)),
+                    ("bundle_ids", str(b)),
+                ]
+            ),
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            for pk in (a, b):
+                bundle = session.get(InventoryProfile, pk)
+                assert "new_au" in bundle.inventory_config["ad_units"]
+            # Unselected bundle stays as-is.
+            unselected = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.profile_id == "c",
+                )
+            ).first()
+            assert "new_au" not in unselected.inventory_config.get("ad_units", [])
+
+    def test_post_reuse_no_selection_redirects_back_to_reuse_page(self, client, test_tenant):
+        """Submitting with no bundles picked round-trips back, no DB writes."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Unchanged", profile_id="unchanged")
+        before = client.get(f"/tenant/{test_tenant}/inventory-profiles/reuse?item=x&kind=ad_unit")
+        assert before.status_code == 200
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data={"item": "x", "kind": "ad_unit"},
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert "/reuse" in response.headers.get("Location", "")
+
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            assert "x" not in bundle.inventory_config.get("ad_units", [])
+
+    def test_post_reuse_skips_bundles_that_already_have_the_item(self, client, test_tenant):
+        """If a selected bundle already has the item, it's silently skipped."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Already Has", profile_id="already")
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            bundle.inventory_config = {"ad_units": ["dup"], "placements": [], "include_descendants": True}
+            session.commit()
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict([("item", "dup"), ("kind", "ad_unit"), ("bundle_ids", str(pk))]),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            # No duplication.
+            assert bundle.inventory_config["ad_units"].count("dup") == 1
+
+    def test_post_reuse_cross_tenant_ids_silently_dropped(self, client, test_tenant):
+        """Selecting a bundle id from another tenant is ignored, not a 500."""
+        _auth_session(client, test_tenant)
+        # Bundle id from a fictional other-tenant scope. The repository's
+        # get_by_pk filters by tenant_id and will return None.
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict([("item", "x"), ("kind", "ad_unit"), ("bundle_ids", "999999")]),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+
+class TestInventoryProfileMultiDomain:
+    """Multi-row publisher_properties editor (#532)."""
+
+    def test_edit_post_with_multiple_domain_rows_persists_each(self, client, test_tenant):
+        """POST with N (domain, tags) rows builds N publisher_properties entries."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Multi", profile_id="multi_dom")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data=MultiDict(
+                [
+                    ("name", "Multi"),
+                    ("profile_id", "multi_dom"),
+                    ("description", "two-row"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", f"{test_tenant}.example.com"),
+                    ("property_tags[]", "premium, news"),
+                    ("publisher_domain[]", "sports.example.com"),
+                    ("property_tags[]", "sports, premium"),
+                ]
+            ),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            domains = sorted(p["publisher_domain"] for p in saved.publisher_properties)
+            assert len(saved.publisher_properties) == 2
+            assert domains == sorted([f"{test_tenant}.example.com", "sports.example.com"])
+            by_domain = {p["publisher_domain"]: p for p in saved.publisher_properties}
+            assert sorted(by_domain[f"{test_tenant}.example.com"]["property_tags"]) == ["news", "premium"]
+            assert sorted(by_domain["sports.example.com"]["property_tags"]) == ["premium", "sports"]
+
+    def test_edit_post_back_compat_single_field(self, client, test_tenant):
+        """Legacy single `property_tags` field still works (no list submission)."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Compat", profile_id="compat")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data={
+                "name": "Compat",
+                "profile_id": "compat",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": "[]",
+                "formats": json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}]),
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            assert len(saved.publisher_properties) == 1
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
+
+    def test_edit_post_rejects_row_missing_tags(self, client, test_tenant):
+        """An empty tags input on any row rejects the entire save."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Bad", profile_id="bad")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data=MultiDict(
+                [
+                    ("name", "Bad"),
+                    ("profile_id", "bad"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", f"{test_tenant}.example.com"),
+                    ("property_tags[]", "premium"),
+                    ("publisher_domain[]", "empty.example.com"),
+                    ("property_tags[]", ""),
+                ]
+            ),
+            follow_redirects=False,
+        )
+        # Redirect back to the editor (flash error); bundle's properties unchanged.
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            # Sample-profile default: one tag entry under `inv_prof_test_tenant.example.com`.
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
+
+
+class TestInventoryProfileDuplicate:
+    """Test inventory profile duplication."""
+
+    def test_duplicate_creates_copy_and_redirects_to_edit(self, client, test_tenant):
+        """POST /duplicate creates a copy with the same fields and redirects to its edit page."""
+        _auth_session(client, test_tenant)
+        source_pk = _create_sample_profile(test_tenant, name="Source Bundle", profile_id="source_bundle")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            source = session.get(InventoryProfile, source_pk)
+            copy = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.name == "Source Bundle (copy)",
+                )
+            ).first()
+
+        assert copy is not None
+        assert copy.id != source_pk
+        assert copy.profile_id == "source_bundle_copy"
+        assert copy.inventory_config == source.inventory_config
+        assert copy.format_ids == source.format_ids
+        assert copy.publisher_properties == source.publisher_properties
+        assert f"/inventory-profiles/{copy.id}/edit" in response.headers.get("Location", "")
+
+    def test_duplicate_twice_generates_unique_profile_ids(self, client, test_tenant):
+        """Duplicating twice yields ..._copy and ..._copy_2."""
+        _auth_session(client, test_tenant)
+        source_pk = _create_sample_profile(test_tenant, name="Twice Bundle", profile_id="twice_bundle")
+
+        client.post(f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate", follow_redirects=False)
+        client.post(f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate", follow_redirects=False)
+
+        with get_db_session() as session:
+            ids = sorted(
+                session.scalars(
+                    select(InventoryProfile.profile_id).where(InventoryProfile.tenant_id == test_tenant)
+                ).all()
+            )
+        assert "twice_bundle" in ids
+        assert "twice_bundle_copy" in ids
+        assert "twice_bundle_copy_2" in ids
+
+    def test_duplicate_nonexistent_redirects_to_list(self, client, test_tenant):
+        """Duplicating a missing bundle redirects without creating anything."""
+        _auth_session(client, test_tenant)
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/duplicate",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            count = len(
+                list(session.scalars(select(InventoryProfile).where(InventoryProfile.tenant_id == test_tenant)).all())
+            )
+        assert count == 0

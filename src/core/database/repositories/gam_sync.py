@@ -136,21 +136,26 @@ class GAMSyncRepository:
         stmt = stmt.order_by(GAMInventory.inventory_type, GAMInventory.name).limit(limit)
         return list(self._session.scalars(stmt).all())
 
-    def list_inventory(self, inventory_type: str) -> list[GAMInventory]:
+    def list_inventory(self, inventory_type: str, limit: int | None = None) -> list[GAMInventory]:
         """Return synced GAM inventory rows of one type
         (``audience_segment``, ``custom_targeting_key``, …) ordered by
         name. Empty when the tenant hasn't synced.
+
+        ``limit`` caps the result set — used by the bundle list page's
+        seed-suggestions peek (#481) where a fresh tenant with thousands
+        of placements just needs the first few.
         """
-        return list(
-            self._session.scalars(
-                select(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == self._tenant_id,
-                    GAMInventory.inventory_type == inventory_type,
-                )
-                .order_by(GAMInventory.name)
-            ).all()
+        stmt = (
+            select(GAMInventory)
+            .where(
+                GAMInventory.tenant_id == self._tenant_id,
+                GAMInventory.inventory_type == inventory_type,
+            )
+            .order_by(GAMInventory.name)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt).all())
 
     def list_values_for_key(self, key_id: str) -> list[GAMInventory]:
         """Custom-targeting-value rows for one key, ordered by name.
@@ -181,6 +186,25 @@ class GAMSyncRepository:
                 inventory_id=inventory_id,
             )
         ).first()
+
+    def list_inventory_by_ids(self, inventory_type: str, inventory_ids: list[str]) -> list[GAMInventory]:
+        """Batch lookup: rows matching ``(inventory_type, inventory_id IN ...)``.
+
+        Used by the bundle editor (#530) to resolve external IDs from
+        ``inventory_config.ad_units`` / ``placements`` into human-readable
+        names in a single query instead of N round-trips.
+        """
+        if not inventory_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(GAMInventory).where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == inventory_type,
+                    GAMInventory.inventory_id.in_(inventory_ids),
+                )
+            ).all()
+        )
 
     def add(self, item: GAMInventory) -> None:
         """Add a new GAMInventory row. Caller commits.
